@@ -70,4 +70,9 @@ Validated: `score(weekly, PPR)` matches nflverse's precomputed
 4. ~~Matchup win probability via Monte Carlo over projections~~
    (`ffdata/matchup.py` — resamples out-of-sample residuals; predictive
    intervals calibrated to ~1pt out-of-sample on 2024)
-5. Edge finder: model probability vs implied odds, tracked over time
+5. ~~Edge finder: model probability vs implied odds, tracked over time~~
+   (`ffdata/edge.py` — walk-forward game models vs de-vigged lines, with a
+   bet-the-edge backtest. Honest finding: a fundamentals-only model from public
+   nflverse data lands ~0.6-1.1 pts MAE short of the closing line, so no edge
+   survives the vig on 2023-24 game markets — spread/total ROI ≈ break-even,
+   moneyline negative. The harness is built to test a *better* signal next.)
