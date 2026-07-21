@@ -75,6 +75,15 @@ def test_optimize_returns_valid_lineups_and_never_worse_than_points():
     assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
 
 
+def test_tournament_returns_valid_lineup_and_never_lowers_the_ceiling():
+    pool = _pool().assign(recent_team="KC", opponent_team="LV")
+    res = LineupOptimizer(_FakeSimCorr(), n_sims=200).optimize_tournament(pool, quantile=0.9)
+    assert len(res["optimal"]["lineup"]) == len(DEFAULT_SLOTS)
+    # Hill-climb starts at max-points, so the ceiling can only improve.
+    assert res["optimal"]["ceiling"] >= res["points"]["ceiling"]
+    assert isinstance(res["optimal"]["stacks"], list)
+
+
 def test_optimize_uses_the_joint_correlated_sampler_when_available():
     pool = _pool().assign(recent_team="KC", opponent_team="LV")
     opp = pd.DataFrame([("O", "QB", 50, "SF", "SEA")],

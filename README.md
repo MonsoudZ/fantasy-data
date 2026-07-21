@@ -93,6 +93,14 @@ correlation. A roster file is one player name per line (see `examples/`). Add
 `--projector neural` for the most accurate projections (slower); drop
 `--opponent` to just get the highest-projected starters.
 
+For large-field contests, `--mode tournament` maximizes the lineup's **ceiling**
+(a high quantile of its own distribution) instead of beating one opponent —
+`--ceiling 0.97` targets the top ~3%. (Honest note: with our data-measured
+correlations, pure ceiling-optimization stacks only marginally — the +0.20
+QB-receiver correlation is diluted across an 8-player lineup while the projection
+cost of stacking is direct. Real DFS stacking is driven substantially by
+ownership/leverage, which needs data nflverse doesn't ship.)
+
 ## Find player-prop edges
 
 ```bash
