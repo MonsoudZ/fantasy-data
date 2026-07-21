@@ -48,4 +48,19 @@ SOURCES = {
         "url": f"{NFLDATA}/games.csv",
         "seasonal": False,
     },
+    # Next Gen Stats: player-tracking metrics not derivable from the box score
+    # (separation, cushion, air-yards share, CPOE, rush yards over expected).
+    # One all-seasons file per stat type; week 0 rows are season aggregates.
+    "ngs_receiving": {
+        "url": f"{NFLVERSE}/nextgen_stats/ngs_receiving.parquet",
+        "seasonal": False,
+    },
+    "ngs_passing": {
+        "url": f"{NFLVERSE}/nextgen_stats/ngs_passing.parquet",
+        "seasonal": False,
+    },
+    "ngs_rushing": {
+        "url": f"{NFLVERSE}/nextgen_stats/ngs_rushing.parquet",
+        "seasonal": False,
+    },
 }

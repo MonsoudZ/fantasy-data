@@ -47,15 +47,35 @@ USAGE_COLS = [
 # kickoff, so these describe the current week directly (no trailing shift).
 INJURY_FEATURES = ["inj_on_report", "inj_status", "practice_dnp", "practice_limited"]
 
+# Next Gen Stats tracking metrics (game outcomes -> rolled trailing like usage).
+# A player only has the metrics for their role; the rest stay NaN.
+#
+# FINDING: off by default because it does not help. On a 2024 GBM walk-forward,
+# adding these 22 features slightly *worsened* MAE/RMSE/rank. Two reasons: NGS is
+# sparse (10-35% populated by position) so mostly-NaN columns dilute, and the
+# metrics (separation, air-yards share, YAC-over-expected) are largely
+# correlated re-encodings of usage/efficiency the box score already provides --
+# not orthogonal information. Consistent with the neural finding that the
+# residual is irreducible outcome variance. Kept opt-in (`include_ngs=True`) as
+# reusable infrastructure for future experiments (e.g. position-specific models
+# where coverage is dense).
+NGS_COLS = [
+    "ngs_separation", "ngs_cushion", "ngs_ay_share", "ngs_yac_oe", "ngs_catch_pct",
+    "ngs_cpoe", "ngs_time_to_throw", "ngs_aggressiveness",
+    "ngs_ryoe_att", "ngs_rush_eff", "ngs_box8",
+]
 
-def _rolling_usage(weekly: pd.DataFrame, windows: tuple[int, ...]) -> pd.DataFrame:
-    """Per-player trailing means of USAGE_COLS, shifted to exclude week W."""
+
+def _rolling_usage(weekly: pd.DataFrame, windows: tuple[int, ...],
+                   cols: list[str] | None = None) -> pd.DataFrame:
+    """Per-player trailing means of `cols`, shifted to exclude week W."""
+    cols = cols or USAGE_COLS
     df = weekly.sort_values(["player_id", "season", "week"]).copy()
-    grp = df.groupby("player_id", sort=False)[USAGE_COLS]
+    grp = df.groupby("player_id", sort=False)[cols]
     for n in windows:
         # shift(1) drops the current week; rolling then averages only prior games
         rolled = grp.transform(lambda s: s.shift(1).rolling(n, min_periods=1).mean())
-        df[[f"{c}_r{n}" for c in USAGE_COLS]] = rolled
+        df[[f"{c}_r{n}" for c in cols]] = rolled
     return df
 
 
@@ -153,9 +173,41 @@ def _load_injuries(con, seasons: list[int]) -> pd.DataFrame:
     """).df()
 
 
-def feature_columns(windows: tuple[int, ...] = (3, 5)) -> list[str]:
+def _load_nextgen(con, seasons: list[int]) -> pd.DataFrame:
+    """Per player-week Next Gen Stats, keyed by gsis player_id.
+
+    Three stat-type files (receiving/passing/rushing) outer-joined; week 0 rows
+    (season aggregates) are excluded. Only tracking metrics that aren't already
+    in `weekly` are kept, prefixed `ngs_`.
+    """
+    where = f"and season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    rec = con.sql(f"""
+        select player_gsis_id as player_id, season, week,
+               avg_separation as ngs_separation, avg_cushion as ngs_cushion,
+               percent_share_of_intended_air_yards as ngs_ay_share,
+               avg_yac_above_expectation as ngs_yac_oe, catch_percentage as ngs_catch_pct
+        from ngs_receiving where week >= 1 {where}
+    """).df()
+    pas = con.sql(f"""
+        select player_gsis_id as player_id, season, week,
+               completion_percentage_above_expectation as ngs_cpoe,
+               avg_time_to_throw as ngs_time_to_throw, aggressiveness as ngs_aggressiveness
+        from ngs_passing where week >= 1 {where}
+    """).df()
+    rus = con.sql(f"""
+        select player_gsis_id as player_id, season, week,
+               rush_yards_over_expected_per_att as ngs_ryoe_att, efficiency as ngs_rush_eff,
+               percent_attempts_gte_eight_defenders as ngs_box8
+        from ngs_rushing where week >= 1 {where}
+    """).df()
+    keys = ["player_id", "season", "week"]
+    return rec.merge(pas, on=keys, how="outer").merge(rus, on=keys, how="outer")
+
+
+def feature_columns(windows: tuple[int, ...] = (3, 5), include_ngs: bool = False) -> list[str]:
     """Names of the model-input columns build_features() produces."""
-    cols = [f"{c}_r{n}" for n in windows for c in USAGE_COLS]
+    roll_cols = USAGE_COLS + (NGS_COLS if include_ngs else [])
+    cols = [f"{c}_r{n}" for n in windows for c in roll_cols]
     cols += [f"def_fp_allowed_r{n}" for n in windows]
     cols += ["team_implied_total", "opp_implied_total", "team_spread", "game_total", "is_home"]
     cols += INJURY_FEATURES
@@ -167,16 +219,19 @@ def build_features(
     rules: ScoringRules = PPR,
     windows: tuple[int, ...] = (3, 5),
     positions: tuple[str, ...] = SKILL_POSITIONS,
+    include_ngs: bool = False,
     con=None,
 ) -> pd.DataFrame:
     """Assemble the leak-free player-week modeling table.
 
     Args:
-        seasons:   seasons to include (default: everything in the lake).
-        rules:     scoring config for the `fp` target column (default PPR).
-        windows:   trailing-average windows, in games, for rolling features.
-        positions: positions to keep (default skill positions).
-        con:       an existing DuckDB connection; one is opened if omitted.
+        seasons:     seasons to include (default: everything in the lake).
+        rules:       scoring config for the `fp` target column (default PPR).
+        windows:     trailing-average windows, in games, for rolling features.
+        positions:   positions to keep (default skill positions).
+        include_ngs: also roll Next Gen Stats metrics (off by default -- see
+                     NGS_COLS; it doesn't improve accuracy).
+        con:         an existing DuckDB connection; one is opened if omitted.
     """
     con = con or connect()
     where = "where season_type = 'REG'"
@@ -194,9 +249,15 @@ def build_features(
     for c in INJURY_FEATURES:
         weekly[c] = weekly[c].fillna(0)  # unlisted == not on the report
 
+    roll_cols = list(USAGE_COLS)
+    if include_ngs:  # opt-in: measured to not help, kept as infrastructure
+        ngs = _load_nextgen(con, seasons or [])
+        weekly = weekly.merge(ngs, on=["player_id", "season", "week"], how="left")
+        roll_cols += NGS_COLS
+
     weekly = score(weekly, rules, col="fp")
 
-    df = _rolling_usage(weekly, windows)
+    df = _rolling_usage(weekly, windows, roll_cols)
     defense = _opponent_defense(weekly, windows)
     df = df.merge(defense, on=["opponent_team", "position", "season", "week"], how="left")
 
