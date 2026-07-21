@@ -1,5 +1,7 @@
 # ff-data
 
+[![CI](https://github.com/MonsoudZ/fantasy-data/actions/workflows/ci.yml/badge.svg)](https://github.com/MonsoudZ/fantasy-data/actions/workflows/ci.yml)
+
 Fantasy football data lake + platform-agnostic scoring. Foundation for
 projections, lineup optimization, and edge-finding vs Vegas lines.
 
@@ -17,7 +19,14 @@ projections, lineup optimization, and edge-finding vs Vegas lines.
 ## Setup
 
 ```bash
-pip install pandas pyarrow duckdb
+pip install -r requirements.txt
+```
+
+The projection and edge models use LightGBM, which needs an OpenMP runtime:
+
+```bash
+brew install libomp          # macOS
+sudo apt-get install libgomp1  # Debian/Ubuntu
 ```
 
 ## Ingest
@@ -30,6 +39,18 @@ python -m ffdata.cli --force                  # re-download everything
 ```
 
 Idempotent: cached seasons are skipped; the current season always refreshes.
+
+## Test
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Unit tests are synthetic and need no data (scoring exactness, leak-free
+features, de-vig/payout math). The integration tests validate `score()` against
+nflverse's precomputed columns on the real lake, and skip automatically until
+you've ingested. CI runs the unit tests on every push.
 
 ## Datasets
 
