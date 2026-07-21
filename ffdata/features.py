@@ -81,6 +81,25 @@ PFR_COLS = [
 # Weather is known pre-game, so used for the current week (no trailing shift).
 WEATHER_FEATURES = ["wind", "temp", "is_dome"]
 
+# Red-zone opportunity from play-by-play (volume in scoring position -> trailing).
+# Opportunity, not efficiency: TD scoring is high-variance, but red-zone volume
+# is its leading indicator, so this is the most orthogonal thing pbp offers.
+# FINDING (`include_pbp=True`): a wash on a 2024 GBM walk-forward (MAE +0.005,
+# RMSE +0.009). rz_targets correlates 0.25 with fp standalone, but that signal
+# is already carried by target/carry volume -- red-zone touches track total
+# touches. Fifth floor confirmation. Opt-in infrastructure.
+PBP_COLS = ["rz_targets", "rz_carries", "i10_targets", "i10_carries", "rz_pass_att"]
+
+# Opponent-quality matchup metrics from pbp -- the "good player vs a specific
+# weak defense" signal. Quality-adjusted (EPA) and split by pass vs rush, plus
+# pass-rush pressure. Trailing per defense, merged onto a player by opponent.
+# FINDING (`include_matchup=True`): a wash overall and WORSE for QBs (MAE +0.040)
+# on 2024. The matchup intuition is right, but the model already captures it via
+# def_fp_allowed and especially team_implied_total -- the Vegas line IS the
+# matchup already priced in, and the market's forecast beats our noisy trailing
+# defensive EPA. Sixth floor confirmation. Opt-in infrastructure.
+MATCHUP_BASE = ["def_pass_epa", "def_rush_epa", "def_pressure"]
+
 
 def _rolling_usage(weekly: pd.DataFrame, windows: tuple[int, ...],
                    cols: list[str] | None = None) -> pd.DataFrame:
@@ -248,6 +267,54 @@ def _load_pfr(con, seasons: list[int]) -> pd.DataFrame:
     return pas.merge(rec, on=keys, how="outer").merge(rus, on=keys, how="outer")
 
 
+def _load_pbp_redzone(con, seasons: list[int]) -> pd.DataFrame:
+    """Per player-week red-zone opportunity counts from play-by-play (gsis ids)."""
+    sw = f"and season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    rec = con.sql(f"""
+        select receiver_player_id as player_id, season, week,
+               sum((yardline_100 <= 20)::int) as rz_targets,
+               sum((yardline_100 <= 10)::int) as i10_targets
+        from pbp where play_type='pass' and receiver_player_id is not null {sw}
+        group by 1, 2, 3""").df()
+    rush = con.sql(f"""
+        select rusher_player_id as player_id, season, week,
+               sum((yardline_100 <= 20)::int) as rz_carries,
+               sum((yardline_100 <= 10)::int) as i10_carries
+        from pbp where play_type='run' and rusher_player_id is not null {sw}
+        group by 1, 2, 3""").df()
+    passer = con.sql(f"""
+        select passer_player_id as player_id, season, week,
+               sum((yardline_100 <= 20)::int) as rz_pass_att
+        from pbp where play_type='pass' and passer_player_id is not null {sw}
+        group by 1, 2, 3""").df()
+    keys = ["player_id", "season", "week"]
+    return rec.merge(rush, on=keys, how="outer").merge(passer, on=keys, how="outer")
+
+
+def _def_matchup(con, seasons: list[int], windows: tuple[int, ...]) -> pd.DataFrame:
+    """Trailing opponent-defense quality (pass/rush EPA allowed + pressure rate).
+
+    Aggregated per defense per week from pbp, then shifted+rolled so it reflects
+    the opponent's form *entering* week W, and merged onto a player by opponent.
+    """
+    sw = f"and season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    agg = con.sql(f"""
+        select defteam as opponent_team, season, week,
+               avg(case when pass=1 then epa end) as def_pass_epa,
+               avg(case when rush=1 then epa end) as def_rush_epa,
+               (sum(sack) + sum(qb_hit)) * 1.0
+                 / nullif(sum(case when pass=1 then 1 else 0 end), 0) as def_pressure
+        from pbp where defteam is not null {sw}
+        group by 1, 2, 3
+    """).df().sort_values(["opponent_team", "season", "week"])
+    grp = agg.groupby("opponent_team", sort=False)
+    for n in windows:
+        for c in MATCHUP_BASE:
+            agg[f"{c}_r{n}"] = grp[c].transform(lambda s: s.shift(1).rolling(n, min_periods=1).mean())
+    keep = ["opponent_team", "season", "week"] + [f"{c}_r{n}" for n in windows for c in MATCHUP_BASE]
+    return agg[keep]
+
+
 def _load_weather(con) -> pd.DataFrame:
     """Per team-game weather from schedules; domes are calm and climate-controlled."""
     return con.sql("""
@@ -265,14 +332,18 @@ def _load_weather(con) -> pd.DataFrame:
 
 
 def feature_columns(windows: tuple[int, ...] = (3, 5), include_ngs: bool = False,
-                    include_extra: bool = False) -> list[str]:
+                    include_extra: bool = False, include_pbp: bool = False,
+                    include_matchup: bool = False) -> list[str]:
     """Names of the model-input columns build_features() produces."""
-    roll_cols = USAGE_COLS + (NGS_COLS if include_ngs else []) + (PFR_COLS if include_extra else [])
+    roll_cols = (USAGE_COLS + (NGS_COLS if include_ngs else [])
+                 + (PFR_COLS if include_extra else []) + (PBP_COLS if include_pbp else []))
     cols = [f"{c}_r{n}" for n in windows for c in roll_cols]
     cols += [f"def_fp_allowed_r{n}" for n in windows]
     cols += ["team_implied_total", "opp_implied_total", "team_spread", "game_total", "is_home"]
     cols += INJURY_FEATURES
     cols += WEATHER_FEATURES if include_extra else []
+    if include_matchup:
+        cols += [f"{c}_r{n}" for n in windows for c in MATCHUP_BASE]
     return cols
 
 
@@ -283,6 +354,8 @@ def build_features(
     positions: tuple[str, ...] = SKILL_POSITIONS,
     include_ngs: bool = False,
     include_extra: bool = False,
+    include_pbp: bool = False,
+    include_matchup: bool = False,
     con=None,
 ) -> pd.DataFrame:
     """Assemble the leak-free player-week modeling table.
@@ -321,12 +394,22 @@ def build_features(
         pfr = _load_pfr(con, seasons or [])
         weekly = weekly.merge(pfr, on=["player_id", "season", "week"], how="left")
         roll_cols += PFR_COLS
+    if include_pbp:  # opt-in experiment: red-zone opportunity from play-by-play
+        rz = _load_pbp_redzone(con, seasons or [])
+        weekly = weekly.merge(rz, on=["player_id", "season", "week"], how="left")
+        for c in PBP_COLS:
+            weekly[c] = weekly[c].fillna(0)  # played but no red-zone touch == 0
+        roll_cols += PBP_COLS
 
     weekly = score(weekly, rules, col="fp")
 
     df = _rolling_usage(weekly, windows, roll_cols)
     defense = _opponent_defense(weekly, windows)
     df = df.merge(defense, on=["opponent_team", "position", "season", "week"], how="left")
+
+    if include_matchup:  # quality-adjusted opponent defense (pass/rush EPA, pressure)
+        matchup = _def_matchup(con, seasons or [], windows)
+        df = df.merge(matchup, on=["opponent_team", "season", "week"], how="left")
 
     schedules = con.sql("select season, week, home_team, away_team, spread_line, total_line from schedules").df()
     implied = _implied_totals(schedules)
