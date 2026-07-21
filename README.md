@@ -84,7 +84,10 @@ Validated: `score(weekly, PPR)` matches nflverse's precomputed
 
 1. ~~Historical dataset + ingestion~~ (this repo)
 2. ~~Feature layer: rolling usage, opponent-adjusted defense, Vegas implied totals~~
-   (`ffdata/features.py` — leak-free player-week table via `build_features()`)
+   (`ffdata/features.py` — leak-free player-week table via `build_features()`.
+   Also models trailing snap share (via the rosters gsis↔pfr crosswalk) and
+   current-week injury-report status; adding them lifts projection MAE, RMSE,
+   and weekly rank on 2024.)
 3. ~~Projection model (LightGBM) vs trailing-average baseline~~
    (`ffdata/projections.py` — walk-forward backtest; LightGBM beats the
    trailing-average baseline on MAE, RMSE, and weekly rank on 2023–24)

@@ -32,15 +32,20 @@ from .scoring import PPR, ScoringRules, score
 # Skill positions worth modeling. DST/K live in different datasets.
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 
-# Usage / efficiency stats rolled into trailing averages. All exist in `weekly`;
-# `fp` is added by score() before rolling.
+# Usage / efficiency stats rolled into trailing averages. `fp` is added by
+# score() and `snap_pct` is merged from snap_counts before rolling.
 USAGE_COLS = [
     "fp",  # fantasy points -- its own strongest trailing predictor
     "targets", "receptions", "receiving_yards", "receiving_air_yards",
     "target_share", "air_yards_share", "wopr", "racr", "receiving_epa",
     "carries", "rushing_yards", "rushing_epa",
     "attempts", "passing_yards", "passing_tds", "passing_epa",
+    "snap_pct",  # offensive snap share -- a leading indicator of usage
 ]
+
+# Injury-report signals. Unlike usage, an injury report is known *before*
+# kickoff, so these describe the current week directly (no trailing shift).
+INJURY_FEATURES = ["inj_on_report", "inj_status", "practice_dnp", "practice_limited"]
 
 
 def _rolling_usage(weekly: pd.DataFrame, windows: tuple[int, ...]) -> pd.DataFrame:
@@ -105,11 +110,55 @@ def _implied_totals(schedules: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([home, away], ignore_index=True)
 
 
+def _load_snap_pct(con, seasons: list[int]) -> pd.DataFrame:
+    """Per player-week offensive snap share, keyed by gsis player_id.
+
+    snap_counts carries only pfr_player_id, so `rosters` (which has both
+    gsis_id and pfr_id) bridges it to weekly's player_id.
+    """
+    where = f"and s.season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    return con.sql(f"""
+        with xwalk as (
+            select season, pfr_id, any_value(gsis_id) as gsis_id
+            from rosters
+            where pfr_id is not null and gsis_id is not null
+            group by season, pfr_id
+        )
+        select x.gsis_id as player_id, s.season, s.week,
+               max(s.offense_pct) as snap_pct
+        from snap_counts s
+        join xwalk x on s.season = x.season and s.pfr_player_id = x.pfr_id
+        where true {where}
+        group by 1, 2, 3
+    """).df()
+
+
+def _load_injuries(con, seasons: list[int]) -> pd.DataFrame:
+    """Per player-week injury-report signals, keyed by gsis player_id.
+
+    Pre-game info, so used for the current week. `report_status` becomes an
+    ordinal severity; practice participation becomes DNP / limited flags.
+    """
+    where = f"and season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    return con.sql(f"""
+        select gsis_id as player_id, season, week,
+               max((report_status in ('Out','Doubtful','Questionable'))::int) as inj_on_report,
+               max(case report_status when 'Out' then 3 when 'Doubtful' then 2
+                    when 'Questionable' then 1 else 0 end) as inj_status,
+               max((practice_status like 'Did Not%%')::int) as practice_dnp,
+               max((practice_status like 'Limited%%')::int) as practice_limited
+        from injuries
+        where gsis_id is not null {where}
+        group by 1, 2, 3
+    """).df()
+
+
 def feature_columns(windows: tuple[int, ...] = (3, 5)) -> list[str]:
     """Names of the model-input columns build_features() produces."""
     cols = [f"{c}_r{n}" for n in windows for c in USAGE_COLS]
     cols += [f"def_fp_allowed_r{n}" for n in windows]
     cols += ["team_implied_total", "opp_implied_total", "team_spread", "game_total", "is_home"]
+    cols += INJURY_FEATURES
     return cols
 
 
@@ -136,6 +185,15 @@ def build_features(
     weekly = con.sql(f"select * from weekly {where}").df()
     if positions:
         weekly = weekly[weekly["position"].isin(positions)]
+
+    # Snap share (trailing usage) and injury report (current-week) signals.
+    snaps = _load_snap_pct(con, seasons or [])
+    weekly = weekly.merge(snaps, on=["player_id", "season", "week"], how="left")
+    injuries = _load_injuries(con, seasons or [])
+    weekly = weekly.merge(injuries, on=["player_id", "season", "week"], how="left")
+    for c in INJURY_FEATURES:
+        weekly[c] = weekly[c].fillna(0)  # unlisted == not on the report
+
     weekly = score(weekly, rules, col="fp")
 
     df = _rolling_usage(weekly, windows)
