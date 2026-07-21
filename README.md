@@ -100,3 +100,18 @@ Validated: `score(weekly, PPR)` matches nflverse's precomputed
    nflverse data lands ~0.6-1.1 pts MAE short of the closing line, so no edge
    survives the vig on 2023-24 game markets — spread/total ROI ≈ break-even,
    moneyline negative. The harness is built to test a *better* signal next.)
+6. ~~Neural projector + win-probability lineup optimizer~~
+   (`ffdata/neural.py` — a GRU over player trajectories, the most accurate
+   single model (beats LightGBM on MAE/RMSE/rank across 2023-25); promoted to
+   the default projector in `matchup.py`. `ffdata/optimize.py` — picks the
+   roster that maximizes win probability, not projected points, using the
+   calibrated Monte Carlo.)
+
+**What we learned:** across six independent tests — a neural model, a stacked
+ensemble, and every rich data source (Next Gen Stats, PFR advanced, play-by-play
+red-zone, opponent matchup) — the weekly point-projection error floor (~±6 RMSE)
+did not move. It's dominated by irreducible game-day variance; the predictable
+signal is already captured by usage, efficiency, and the Vegas line. The payoff
+therefore shifts from *predicting* better to *deciding* better under calibrated
+uncertainty (steps 4 and 6). Those experiments live behind opt-in flags in
+`features.py` (`include_ngs` / `include_extra` / `include_pbp` / `include_matchup`).

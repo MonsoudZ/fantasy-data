@@ -86,16 +86,24 @@ class MatchupSimulator:
         positions: tuple[str, ...] = ("QB", "RB", "WR", "TE"),
         n_bins: int = 5,
         seed: int = 0,
+        projector: str = "neural",
     ) -> "MatchupSimulator":
+        """Build the simulator. `projector`: "neural" (the promoted GRU, most
+        accurate) or "gbm" (faster). Both feed a residual sampler built from
+        out-of-sample predictions -- in-sample residuals understate variance."""
         resid_seasons = resid_seasons or [2023, 2024]
         seasons = list(range(train_from, max(resid_seasons) + 1))
         feats = build_features(seasons=seasons, positions=positions)
-        projector = GBMProjector()
-        # Out-of-sample residuals -- in-sample would understate real variance.
-        preds = walk_forward(feats, projector, resid_seasons)
-        preds = preds.assign(residual=preds["fp"] - preds["pred"])
-        sampler = ResidualSampler(preds[["position", "pred", "residual"]], n_bins, seed)
-        return cls(feats, projector, sampler)
+        if projector == "neural":
+            from .neural import NeuralProjector, neural_residuals
+            resid = neural_residuals(feats, resid_seasons)
+            proj = NeuralProjector()
+        else:
+            proj = GBMProjector()
+            preds = walk_forward(feats, proj, resid_seasons)
+            resid = preds.assign(residual=preds["fp"] - preds["pred"])[["position", "pred", "residual"]]
+        sampler = ResidualSampler(resid, n_bins, seed)
+        return cls(feats, proj, sampler)
 
     def project(self, season: int, week: int) -> pd.DataFrame:
         """Train on everything before (season, week) and project that week."""

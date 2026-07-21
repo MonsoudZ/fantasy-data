@@ -144,6 +144,107 @@ def train_predict(feats: pd.DataFrame, test_season: int, epochs: int = 25, seed:
     return out
 
 
+def _standardize_with(mat: np.ndarray, mu: np.ndarray, sd: np.ndarray) -> np.ndarray:
+    sd = np.where(sd < 1e-6, 1.0, sd)
+    return np.nan_to_num((mat - mu) / sd, nan=0.0)
+
+
+def _seq_arrays(f: pd.DataFrame, stats: tuple):
+    """Right-aligned K-game sequences + context, standardized with given stats."""
+    mu_seq, sd_seq, mu_ctx, sd_ctx = stats
+    seq = _standardize_with(f[SEQ_STATS].to_numpy(float), mu_seq, sd_seq)
+    ctx = _standardize_with(f[CONTEXT].to_numpy(float), mu_ctx, sd_ctx)
+    pos = f["position"].map({p: i for i, p in enumerate(POSITIONS)}).fillna(0).astype(int).to_numpy()
+    n, d = len(f), len(SEQ_STATS)
+    xseq = np.zeros((n, K, d), dtype=np.float32)
+    for idx in f.groupby("player_id").indices.values():
+        for j, row in enumerate(idx):
+            prior = idx[max(0, j - K):j]
+            if len(prior):
+                xseq[row, K - len(prior):] = seq[prior]
+    return xseq, ctx.astype(np.float32), pos
+
+
+class NeuralProjector:
+    """The GRU as a drop-in projector (fit/predict), matching GBMProjector.
+
+    fit() stores the training frame so predict() can build each row's sequence
+    from its prior games. Intended for single-week prediction (the matchup /
+    optimizer use case); predict a multi-week span one week at a time.
+    """
+
+    name = "neural"
+
+    def __init__(self, epochs: int = 25, seed: int = 0):
+        self.epochs, self.seed = epochs, seed
+        self._model = self._hist = self._stats = None
+
+    def fit(self, train: pd.DataFrame) -> "NeuralProjector":
+        import torch
+        import torch.nn as nn
+        torch.set_num_threads(1)
+        torch.manual_seed(self.seed)
+        hist = train.sort_values(["player_id", "season", "week"]).reset_index(drop=True)
+        S, C = hist[SEQ_STATS].to_numpy(float), hist[CONTEXT].to_numpy(float)
+        self._stats = (np.nanmean(S, 0), np.nanstd(S, 0), np.nanmean(C, 0), np.nanstd(C, 0))
+        self._hist = hist
+
+        class SeqModel(nn.Module):
+            def __init__(self, n_seq, n_ctx, n_pos=4, hidden=64, emb=4):
+                super().__init__()
+                self.gru = nn.GRU(n_seq, hidden, batch_first=True)
+                self.pos_emb = nn.Embedding(n_pos, emb)
+                self.head = nn.Sequential(
+                    nn.Linear(hidden + n_ctx + emb, 64), nn.ReLU(), nn.Dropout(0.2), nn.Linear(64, 1))
+
+            def forward(self, xseq, xctx, pos):
+                _, h = self.gru(xseq)
+                return self.head(torch.cat([h.squeeze(0), xctx, self.pos_emb(pos)], dim=1)).squeeze(1)
+
+        xseq, ctx, pos = _seq_arrays(hist, self._stats)
+        Xs, Xc, P, Y = (torch.tensor(a) for a in (xseq, ctx, pos, hist["fp"].to_numpy(np.float32)))
+        model = SeqModel(len(SEQ_STATS), len(CONTEXT))
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+        loss_fn = nn.MSELoss()
+        idx = np.arange(len(hist))
+        model.train()
+        for _ in range(self.epochs):
+            perm = idx[torch.randperm(len(idx)).numpy()]
+            for i in range(0, len(perm), 512):
+                b = perm[i:i + 512]
+                opt.zero_grad()
+                loss_fn(model(Xs[b], Xc[b], P[b]), Y[b]).backward()
+                opt.step()
+        model.eval()
+        self._model = model
+        return self
+
+    def predict(self, test: pd.DataFrame) -> np.ndarray:
+        import torch
+        h = self._hist.assign(_t=False)
+        t = test.assign(_t=True)
+        comb = pd.concat([h, t], ignore_index=True).sort_values(
+            ["player_id", "season", "week"]).reset_index(drop=True)
+        xseq, ctx, pos = _seq_arrays(comb, self._stats)
+        te = np.where(comb["_t"].to_numpy())[0]
+        with torch.no_grad():
+            p = self._model(torch.tensor(xseq[te]), torch.tensor(ctx[te]), torch.tensor(pos[te])).numpy()
+        out = comb.loc[comb["_t"], ["player_id", "season", "week"]].assign(_pred=p)
+        return test.merge(out, on=["player_id", "season", "week"], how="left")["_pred"].to_numpy()
+
+
+def neural_residuals(feats: pd.DataFrame, resid_seasons: list[int], epochs: int = 25) -> pd.DataFrame:
+    """Out-of-sample (position, pred, residual) rows for a ResidualSampler."""
+    rows = []
+    for season in sorted(resid_seasons):
+        proj = NeuralProjector(epochs=epochs).fit(feats[feats["season"] < season])
+        test = feats[(feats["season"] == season) & feats["fp_r3"].notna()].copy()
+        test["pred"] = proj.predict(test)
+        test["residual"] = test["fp"] - test["pred"]
+        rows.append(test[["position", "pred", "residual"]])
+    return pd.concat(rows, ignore_index=True)
+
+
 def backtest_neural(train_from: int = 2019, test_season: int = 2024, epochs: int = 25) -> dict:
     """Neural ant accuracy on the test season + error correlation with a GBM."""
     from scipy.stats import spearmanr
