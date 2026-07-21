@@ -65,6 +65,22 @@ NGS_COLS = [
     "ngs_ryoe_att", "ngs_rush_eff", "ngs_box8",
 ]
 
+# PFR advanced metrics absent from the box score (game outcomes -> trailing).
+# FINDING: off by default (`include_extra=True` to enable). On a 2024 GBM
+# walk-forward, PFR advanced + weather together were a wash (MAE +0.007, RMSE
+# -0.004, rank +0.0005 -- all within noise). Even genuinely orthogonal signals
+# (pressure, drops, broken tackles, wind) don't lower the floor: the predictable
+# part is already captured by usage/efficiency, and the residual is outcome
+# variance. Fourth confirmation of the irreducible floor (after neural, colony,
+# NGS). Kept as opt-in infrastructure.
+PFR_COLS = [
+    "pfr_bad_throw_pct", "pfr_pressured_pct", "pfr_sacked",       # QB protection
+    "pfr_brk_tkl_rec", "pfr_drop_pct", "pfr_rec_rat",             # receiving
+    "pfr_ybc_avg", "pfr_yac_avg", "pfr_brk_tkl_rush",             # rushing
+]
+# Weather is known pre-game, so used for the current week (no trailing shift).
+WEATHER_FEATURES = ["wind", "temp", "is_dome"]
+
 
 def _rolling_usage(weekly: pd.DataFrame, windows: tuple[int, ...],
                    cols: list[str] | None = None) -> pd.DataFrame:
@@ -204,13 +220,59 @@ def _load_nextgen(con, seasons: list[int]) -> pd.DataFrame:
     return rec.merge(pas, on=keys, how="outer").merge(rus, on=keys, how="outer")
 
 
-def feature_columns(windows: tuple[int, ...] = (3, 5), include_ngs: bool = False) -> list[str]:
+def _load_pfr(con, seasons: list[int]) -> pd.DataFrame:
+    """Per player-week PFR advanced metrics, keyed by gsis via the roster crosswalk."""
+    where = f"and s.season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
+    xwalk = "with xw as (select season, pfr_id, any_value(gsis_id) gsis_id from rosters " \
+            "where pfr_id is not null and gsis_id is not null group by season, pfr_id)"
+    pas = con.sql(f"""{xwalk}
+        select x.gsis_id as player_id, s.season, s.week,
+               passing_bad_throw_pct as pfr_bad_throw_pct,
+               times_pressured_pct as pfr_pressured_pct, times_sacked as pfr_sacked
+        from pfr_pass s join xw x on s.season=x.season and s.pfr_player_id=x.pfr_id
+        where true {where}""").df()
+    rec = con.sql(f"""{xwalk}
+        select x.gsis_id as player_id, s.season, s.week,
+               receiving_broken_tackles as pfr_brk_tkl_rec,
+               receiving_drop_pct as pfr_drop_pct, receiving_rat as pfr_rec_rat
+        from pfr_rec s join xw x on s.season=x.season and s.pfr_player_id=x.pfr_id
+        where true {where}""").df()
+    rus = con.sql(f"""{xwalk}
+        select x.gsis_id as player_id, s.season, s.week,
+               rushing_yards_before_contact_avg as pfr_ybc_avg,
+               rushing_yards_after_contact_avg as pfr_yac_avg,
+               rushing_broken_tackles as pfr_brk_tkl_rush
+        from pfr_rush s join xw x on s.season=x.season and s.pfr_player_id=x.pfr_id
+        where true {where}""").df()
+    keys = ["player_id", "season", "week"]
+    return pas.merge(rec, on=keys, how="outer").merge(rus, on=keys, how="outer")
+
+
+def _load_weather(con) -> pd.DataFrame:
+    """Per team-game weather from schedules; domes are calm and climate-controlled."""
+    return con.sql("""
+        with g as (
+            select season, week, home_team as team, wind, temp, roof from schedules
+            union all
+            select season, week, away_team as team, wind, temp, roof from schedules
+        )
+        select season, week, team,
+               (roof in ('dome','closed'))::int as is_dome,
+               case when roof in ('dome','closed') then 0 else wind end as wind,
+               case when roof in ('dome','closed') then 70 else temp end as temp
+        from g
+    """).df()
+
+
+def feature_columns(windows: tuple[int, ...] = (3, 5), include_ngs: bool = False,
+                    include_extra: bool = False) -> list[str]:
     """Names of the model-input columns build_features() produces."""
-    roll_cols = USAGE_COLS + (NGS_COLS if include_ngs else [])
+    roll_cols = USAGE_COLS + (NGS_COLS if include_ngs else []) + (PFR_COLS if include_extra else [])
     cols = [f"{c}_r{n}" for n in windows for c in roll_cols]
     cols += [f"def_fp_allowed_r{n}" for n in windows]
     cols += ["team_implied_total", "opp_implied_total", "team_spread", "game_total", "is_home"]
     cols += INJURY_FEATURES
+    cols += WEATHER_FEATURES if include_extra else []
     return cols
 
 
@@ -220,6 +282,7 @@ def build_features(
     windows: tuple[int, ...] = (3, 5),
     positions: tuple[str, ...] = SKILL_POSITIONS,
     include_ngs: bool = False,
+    include_extra: bool = False,
     con=None,
 ) -> pd.DataFrame:
     """Assemble the leak-free player-week modeling table.
@@ -254,6 +317,10 @@ def build_features(
         ngs = _load_nextgen(con, seasons or [])
         weekly = weekly.merge(ngs, on=["player_id", "season", "week"], how="left")
         roll_cols += NGS_COLS
+    if include_extra:  # opt-in experiment: PFR advanced metrics + weather
+        pfr = _load_pfr(con, seasons or [])
+        weekly = weekly.merge(pfr, on=["player_id", "season", "week"], how="left")
+        roll_cols += PFR_COLS
 
     weekly = score(weekly, rules, col="fp")
 
@@ -267,5 +334,10 @@ def build_features(
         implied, left_on=["season", "week", "recent_team"],
         right_on=["season", "week", "team"], how="left",
     ).drop(columns=["team"])
+
+    if include_extra:  # weather is pre-game -> current-week feature (no shift)
+        weather = _load_weather(con)
+        df = df.merge(weather, left_on=["season", "week", "recent_team"],
+                      right_on=["season", "week", "team"], how="left").drop(columns=["team"])
 
     return df.sort_values(["season", "week", "player_id"]).reset_index(drop=True)

@@ -63,4 +63,19 @@ SOURCES = {
         "url": f"{NFLVERSE}/nextgen_stats/ngs_rushing.parquet",
         "seasonal": False,
     },
+    # Pro Football Reference advanced stats, per player per week. Carries signal
+    # absent from the box score: pass pressure/sacks/blitzes, dropped passes,
+    # broken tackles, yards before/after contact. Keyed by pfr_player_id.
+    "pfr_pass": {
+        "url": f"{NFLVERSE}/pfr_advstats/advstats_week_pass_{{season}}.parquet",
+        "seasonal": True,
+    },
+    "pfr_rec": {
+        "url": f"{NFLVERSE}/pfr_advstats/advstats_week_rec_{{season}}.parquet",
+        "seasonal": True,
+    },
+    "pfr_rush": {
+        "url": f"{NFLVERSE}/pfr_advstats/advstats_week_rush_{{season}}.parquet",
+        "seasonal": True,
+    },
 }
