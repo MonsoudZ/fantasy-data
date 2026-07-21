@@ -104,6 +104,22 @@ marginally, though (the +0.20 QB-receiver correlation is diluted across an
 opponent receivers — concentrating several correlations so the fat right tail
 survives. This is how real DFS optimizers enforce stack rules.
 
+## Draft
+
+```bash
+python -m ffdata.draft --season 2025               # VOR-ranked board + auction $
+python -m ffdata.draft --season 2025 --position RB --drafted "Bijan Robinson,Breece Hall"
+```
+
+Drafting is a separate model: it projects a player's whole *season* from their
+prior-season production + age + experience (there's no in-season data at draft
+time), then computes VOR (value over replacement) for snake ranking and auction
+dollar values. Honest note: the season model alone doesn't beat naive "last
+year's points" on ranking, so the projection is a **blend** (0.4 model + 0.6
+prior year) — which beats both and keeps the board sane (proven studs on top,
+not last year's flukes). Rookies are skipped (no prior season). Keepers, trades,
+and dynasty are the same value engine applied differently.
+
 ### Web UI
 
 ```bash
