@@ -36,10 +36,11 @@ POSITIONS = ("QB", "RB", "WR", "TE")
 DEFAULT_LEAGUE = {"teams": 12, "budget": 200, "roster_spots": 15,
                   "starters": {"QB": 1, "RB": 2, "WR": 3, "TE": 1}, "flex": 1}
 
-# Prior-season aggregates used to predict next-season points.
+# Prior-season aggregates + preseason context used to predict next-season points.
 _FEATS = ["p_games", "p_fp", "p_ppg", "p_targets", "p_carries", "p_receptions",
           "p_rec_yds", "p_rush_yds", "p_pass_yds", "p_pass_tds", "p_rush_tds",
-          "p_rec_tds", "p_tgt_share", "age", "years_exp"] + [f"is_{p}" for p in POSITIONS]
+          "p_rec_tds", "p_tgt_share", "age", "years_exp",
+          "team_changed", "coach_changed", "sos"] + [f"is_{p}" for p in POSITIONS]
 _PARAMS = dict(n_estimators=400, learning_rate=0.03, num_leaves=31, min_child_samples=20,
                subsample=0.8, colsample_bytree=0.8, random_state=0, verbose=-1, n_jobs=4)
 # The GBM alone ranks slightly *worse* than raw prior-season points (it chases
@@ -72,8 +73,52 @@ def _roster_info(con) -> pd.DataFrame:
     """).df()
 
 
-def _pairs(agg: pd.DataFrame, ri: pd.DataFrame) -> pd.DataFrame:
-    """Feature rows: prior-season aggregates (season S) -> target = fp at S+1."""
+def _team_season(con) -> pd.DataFrame:
+    """The team a player played most for, per season (for roster-change signal)."""
+    return con.sql("""
+        select player_id, season, team from (
+            select player_id, season, recent_team as team, count(*) c,
+                   row_number() over (partition by player_id, season order by count(*) desc) rn
+            from weekly where season_type='REG'
+            group by player_id, season, recent_team)
+        where rn = 1
+    """).df()
+
+
+def _team_coach(con) -> pd.DataFrame:
+    """Head coach per team per season, derived from the schedule (for coach-change)."""
+    return con.sql("""
+        select season, home_team as team, any_value(home_coach) as coach
+        from schedules where game_type = 'REG' group by season, home_team
+    """).df()
+
+
+def _sos(con) -> pd.DataFrame:
+    """Strength of schedule: for each team-season-position, the average fantasy
+    points its upcoming opponents allowed to that position the *prior* year.
+    Higher = easier schedule. Uses the known schedule + last year's defenses,
+    so it's available at draft time and leak-free."""
+    allowed = con.sql("""
+        select opponent_team as opp, position, season, sum(fantasy_points_ppr) as allowed
+        from weekly where season_type='REG' and position in ('QB','RB','WR','TE')
+        group by opponent_team, position, season
+    """).df()
+    opp = con.sql("""
+        select season, home_team as team, away_team as opp from schedules where game_type='REG'
+        union all
+        select season, away_team as team, home_team as opp from schedules where game_type='REG'
+    """).df()
+    prev = allowed.assign(season=allowed["season"] + 1)  # last year's D -> this year's SOS
+    m = opp.merge(prev, on=["season", "opp"])
+    sos = m.groupby(["team", "season", "position"])["allowed"].mean().reset_index()
+    return sos.rename(columns={"allowed": "sos"})
+
+
+def _feature_frame(con) -> pd.DataFrame:
+    """Feature rows: prior-season aggregates (S) + preseason context at S+1 ->
+    target = fp at S+1. Target is NaN for the not-yet-played season."""
+    agg = _season_agg(con)
+    ts, coach, sos = _team_season(con), _team_coach(con), _sos(con)
     feat = agg.rename(columns={
         "games": "p_games", "fp": "p_fp", "targets": "p_targets", "carries": "p_carries",
         "receptions": "p_receptions", "rec_yds": "p_rec_yds", "rush_yds": "p_rush_yds",
@@ -81,11 +126,29 @@ def _pairs(agg: pd.DataFrame, ri: pd.DataFrame) -> pd.DataFrame:
         "rec_tds": "p_rec_tds", "tgt_share": "p_tgt_share"}).copy()
     feat["p_ppg"] = feat["p_fp"] / feat["p_games"].clip(lower=1)
     feat["tseason"] = feat["season"] + 1
+
     tgt = agg[["player_id", "season", "fp"]].rename(columns={"season": "tseason", "fp": "target_fp"})
-    df = feat.merge(tgt, on=["player_id", "tseason"], how="left")  # target None until fit time
-    # age / experience as of the *target* season (known preseason)
-    df = df.merge(ri.rename(columns={"season": "tseason"}), on=["player_id", "tseason"], how="left")
+    df = feat.merge(tgt, on=["player_id", "tseason"], how="left")
+    df = df.merge(_roster_info(con).rename(columns={"season": "tseason"}), on=["player_id", "tseason"], how="left")
     df["age"] = df["tseason"] - df["birth_year"]
+
+    # Roster change: player's team at S+1 differs from S.
+    df = df.merge(ts.rename(columns={"team": "prior_team"}), on=["player_id", "season"], how="left")
+    df = df.merge(ts.rename(columns={"season": "tseason", "team": "new_team"}), on=["player_id", "tseason"], how="left")
+    df["team_changed"] = (df["prior_team"].fillna("") != df["new_team"].fillna("")).astype(int)
+
+    # Coaching change: new team's coach at S+1 differs from that team's coach at S.
+    cn = coach.rename(columns={"season": "tseason", "team": "new_team", "coach": "coach_new"})
+    co = coach.assign(tseason=coach["season"] + 1).rename(columns={"team": "new_team", "coach": "coach_old"})
+    df = df.merge(cn, on=["tseason", "new_team"], how="left")
+    df = df.merge(co[["new_team", "tseason", "coach_old"]], on=["new_team", "tseason"], how="left")
+    df["coach_changed"] = ((df["coach_new"] != df["coach_old"]) & df["coach_old"].notna()).astype(int)
+
+    # Strength of schedule for the new team + position at S+1.
+    df = df.merge(sos.rename(columns={"season": "tseason", "team": "new_team"}),
+                  on=["tseason", "new_team", "position"], how="left")
+    df["sos"] = df["sos"].fillna(df["sos"].median())
+
     for p in POSITIONS:
         df[f"is_{p}"] = (df["position"] == p).astype(int)
     return df
@@ -98,8 +161,7 @@ def project_season(target_season: int, con=None) -> pd.DataFrame:
     (leak-free), then predicts the players entering `target_season`.
     """
     con = con or connect()
-    agg, ri = _season_agg(con), _roster_info(con)
-    df = _pairs(agg, ri)
+    df = _feature_frame(con)
     train = df[(df["tseason"] < target_season) & df["target_fp"].notna()]
     test = df[df["tseason"] == target_season].copy()
     if test.empty:
@@ -166,7 +228,7 @@ def backtest_rank(target_season: int, con=None) -> dict:
     actual = _season_agg(con)
     actual = actual[actual["season"] == target_season][["player_id", "fp"]]
     m = proj.merge(actual, on="player_id", how="inner")
-    naive = _pairs(_season_agg(con), _roster_info(con))
+    naive = _feature_frame(con)
     naive = naive[naive["tseason"] == target_season][["player_id", "p_fp"]]
     m = m.merge(naive, on="player_id", how="left")
     return {"season": target_season, "n": len(m),
