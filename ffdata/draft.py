@@ -220,6 +220,53 @@ def best_available(board: pd.DataFrame, drafted: list[str] | None = None, positi
     return out.head(n).reset_index(drop=True)
 
 
+def round_cost(board: pd.DataFrame, rnd: int, teams: int = 12) -> float:
+    """Auction $ a round-`rnd` pick is worth (value at the top of that round)."""
+    rank = max(0, (rnd - 1) * teams)
+    return float(board.iloc[rank]["auction"]) if rank < len(board) else 1.0
+
+
+def keeper_value(board: pd.DataFrame, keepers: list, teams: int = 12,
+                 cost_type: str = "auction") -> pd.DataFrame:
+    """Surplus value of keeping each player at its cost.
+
+    keepers: list of (player, cost). cost is auction $ (cost_type="auction") or a
+    draft round (cost_type="round", converted via round_cost). Surplus = the
+    player's projected value minus what keeping him costs; positive is a bargain.
+    """
+    from .optimize import _norm
+    bi = {_norm(r["player"]): r for _, r in board.iterrows()}
+    rows = []
+    for name, cost in keepers:
+        r = bi.get(_norm(name))
+        if r is None:
+            continue
+        c = float(cost) if cost_type == "auction" else round_cost(board, int(cost), teams)
+        rows.append({"player": r["player"], "position": r["position"],
+                     "value": int(r["auction"]), "cost": int(round(c)),
+                     "surplus": int(round(r["auction"] - c))})
+    return pd.DataFrame(rows).sort_values("surplus", ascending=False).reset_index(drop=True)
+
+
+def trade_value(board: pd.DataFrame, side_a: list, side_b: list) -> dict:
+    """Evaluate a trade by total projected value (auction $ and VOR) per side."""
+    from .optimize import _norm
+    bi = {_norm(r["player"]): r for _, r in board.iterrows()}
+
+    def side(names):
+        got = [bi[_norm(n)] for n in names if _norm(n) in bi]
+        return {"players": [{"player": r["player"], "position": r["position"],
+                             "value": int(r["auction"]), "vor": float(r["vor"])} for r in got],
+                "auction": sum(int(r["auction"]) for r in got),
+                "vor": round(sum(float(r["vor"]) for r in got), 1)}
+
+    a, b = side(side_a), side(side_b)
+    diff = a["auction"] - b["auction"]
+    verdict = ("roughly even" if abs(diff) <= 5 else
+               f"Side A wins by ${diff}" if diff > 0 else f"Side B wins by ${-diff}")
+    return {"side_a": a, "side_b": b, "diff": diff, "verdict": verdict}
+
+
 def backtest_rank(target_season: int, con=None) -> dict:
     """Rank quality of the preseason projection vs the actual season finish."""
     from scipy.stats import spearmanr

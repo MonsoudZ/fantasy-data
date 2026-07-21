@@ -120,6 +120,29 @@ prior year) — which beats both and keeps the board sane (proven studs on top,
 not last year's flukes). Rookies are skipped (no prior season). Keepers, trades,
 and dynasty are the same value engine applied differently.
 
+### Keepers, trades, dynasty
+
+```bash
+python -m ffdata.dynasty --season 2025          # multi-year, age-curve-adjusted value
+```
+
+```python
+from ffdata.draft import draft_board, keeper_value, trade_value
+b = draft_board(2025)
+keeper_value(b, [("Puka Nacua", 8), ("CeeDee Lamb", 1)], cost_type="round")  # surplus
+trade_value(b, ["Ja'Marr Chase", "George Kittle"], ["CeeDee Lamb"])           # who wins
+```
+
+- **Keepers**: surplus = a player's projected value minus his keep cost (in $ or
+  draft round). **Trades**: total value per side + a verdict. Both are arithmetic
+  on the draft board.
+- **Dynasty** (`ffdata/dynasty.py`) adds the one new model: **age curves** built
+  by the delta method (year-over-year change for the *same* player, which removes
+  the survivorship bias that flattens naive "avg points by age"). The recovered
+  curves match reality — RBs peak ~24 and fall off a cliff, WRs peak ~25, TEs age
+  gracefully. Dynasty value is VOR projected forward over `--years` and
+  discounted, so youth is rewarded (Nacua over an equal-value older WR).
+
 ### Web UI
 
 ```bash

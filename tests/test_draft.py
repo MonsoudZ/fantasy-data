@@ -2,7 +2,32 @@
 
 import pandas as pd
 
-from ffdata.draft import _replacement_ranks, best_available, DEFAULT_LEAGUE, POSITIONS
+from ffdata.draft import (_replacement_ranks, best_available, keeper_value, trade_value,
+                          round_cost, DEFAULT_LEAGUE, POSITIONS)
+
+
+def _valued_board():
+    return pd.DataFrame({
+        "player": ["Stud", "Mid", "Cheap", "Bench"], "position": ["WR", "RB", "WR", "TE"],
+        "proj": [300, 250, 200, 150], "vor": [150, 100, 60, 20], "auction": [70, 45, 25, 5]})
+
+
+def test_keeper_surplus_ranks_bargains_first():
+    kp = keeper_value(_valued_board(), [("Cheap", 10), ("Stud", 65)], cost_type="auction")
+    d = dict(zip(kp["player"], kp["surplus"]))
+    assert d["Cheap"] == 15 and d["Stud"] == 5      # value - cost
+    assert kp["player"].iloc[0] == "Cheap"          # biggest surplus on top
+
+
+def test_trade_value_totals_and_verdict():
+    r = trade_value(_valued_board(), ["Stud"], ["Mid", "Cheap"])
+    assert r["side_a"]["auction"] == 70 and r["side_b"]["auction"] == 70
+    assert "even" in r["verdict"]
+
+
+def test_round_cost_falls_with_later_rounds():
+    b = _valued_board()
+    assert round_cost(b, 1, teams=1) >= round_cost(b, 2, teams=1)
 
 
 def test_replacement_ranks_reflect_position_depth():
