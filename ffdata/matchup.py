@@ -91,13 +91,16 @@ class MatchupSimulator:
         n_bins: int = 5,
         seed: int = 0,
         projector: str = "neural",
+        rules=None,
     ) -> "MatchupSimulator":
         """Build the simulator. `projector`: "neural" (the promoted GRU, most
-        accurate) or "gbm" (faster). Both feed a residual sampler built from
-        out-of-sample predictions -- in-sample residuals understate variance."""
+        accurate) or "gbm" (faster). `rules`: a ScoringRules for the fantasy-point
+        target (default PPR). Both feed a residual sampler built from out-of-
+        sample predictions -- in-sample residuals understate variance."""
+        from .scoring import PPR
         resid_seasons = resid_seasons or [2023, 2024]
         seasons = list(range(train_from, max(resid_seasons) + 1))
-        feats = build_features(seasons=seasons, positions=positions)
+        feats = build_features(seasons=seasons, positions=positions, rules=rules or PPR)
         if projector == "neural":
             from .neural import NeuralProjector, neural_residuals
             resid = neural_residuals(feats, resid_seasons)

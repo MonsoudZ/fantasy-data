@@ -80,6 +80,19 @@ my_league = ScoringRules(pass_td=6.0, te_reception_bonus=0.5)
 Validated: `score(weekly, PPR)` matches nflverse's precomputed
 `fantasy_points_ppr` with 0.00 max deviation on the 2024 season.
 
+## Set your weekly lineup
+
+```bash
+python -m ffdata.optimize --week 15 --roster examples/my_roster.csv \
+                          --opponent examples/opponent.csv --scoring ppr
+```
+
+Picks the lineup that maximizes your **win probability** against that opponent
+(not just projected points), using the calibrated Monte Carlo with same-game
+correlation. A roster file is one player name per line (see `examples/`). Add
+`--projector neural` for the most accurate projections (slower); drop
+`--opponent` to just get the highest-projected starters.
+
 ## Roadmap
 
 1. ~~Historical dataset + ingestion~~ (this repo)

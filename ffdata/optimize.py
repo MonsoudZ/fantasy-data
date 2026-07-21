@@ -20,12 +20,20 @@ swaps to maximize simulated P(my_total > opp_total). Because the draw is
 correlated, the optimizer now sees a stack's true ceiling and will build one
 when chasing win probability as an underdog -- the whole point of stacking.
 
+    # Weekly CLI (a Sunday-morning tool):
+    python -m ffdata.optimize --week 15 --roster my_players.csv \\
+                              --opponent their_players.csv --scoring ppr
+
+    # Or from Python:
     from ffdata.matchup import MatchupSimulator
     from ffdata.optimize import LineupOptimizer
     sim = MatchupSimulator.fit()
     board = sim.project(season=2024, week=15)
     opt = LineupOptimizer(sim).optimize(my_pool, opp_lineup)
     print(opt["optimal_win_prob"], "vs points-lineup", opt["points_win_prob"])
+
+A roster file is one player name per line (a `player` header is fine); names are
+matched loosely (case, punctuation, and Jr/Sr/III suffixes are ignored).
 """
 
 from __future__ import annotations
@@ -137,36 +145,117 @@ def _assemble(board: pd.DataFrame, slots=DEFAULT_SLOTS) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-if __name__ == "__main__":
+# --------------------------------------------------------------------------- #
+# Weekly CLI
+# --------------------------------------------------------------------------- #
+
+import re as _re
+
+_SUFFIX = _re.compile(r"\b(jr|sr|ii|iii|iv|v)\b\.?", _re.I)
+
+
+def _norm(name: str) -> str:
+    """Loose name key for matching a roster CSV to the projection board."""
+    n = _SUFFIX.sub("", str(name).lower())
+    n = _re.sub(r"[^a-z ]", "", n)
+    return _re.sub(r"\s+", " ", n).strip()
+
+
+def _load_names(path: str) -> list[str]:
+    """Read player names: one per line, or the first column of a CSV (header ok)."""
+    names = []
+    with open(path) as f:
+        for i, line in enumerate(f):
+            s = line.strip().split(",")[0].strip().strip('"')
+            if not s:
+                continue
+            if i == 0 and s.lower() in ("player", "name", "players", "player_name"):
+                continue
+            names.append(s)
+    return names
+
+
+def _match(names: list[str], board: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Match roster names to board rows by normalized name."""
+    idx = {}
+    for _, r in board.iterrows():
+        idx.setdefault(_norm(r["player_display_name"]), r)
+    rows, missing = [], []
+    for name in names:
+        r = idx.get(_norm(name))
+        (rows.append(r) if r is not None else missing.append(name))
+    return (pd.DataFrame(rows).reset_index(drop=True) if rows else board.iloc[:0]), missing
+
+
+def _print_lineup(title: str, lineup, board: pd.DataFrame) -> None:
+    pred = board.set_index("player_display_name")
+    print(f"\n{title}")
+    total = 0.0
+    for slot, name in lineup:
+        row = pred.loc[name]
+        total += float(row["pred"])
+        team = row.get("recent_team", "")
+        print(f"  {slot:5} {name:24} {row['position']:3} {team:4} {row['pred']:5.1f}")
+    print(f"  {'':5} {'TOTAL':24} {'':3} {'':4} {total:5.1f}")
+
+
+def main() -> None:
+    import argparse
+    from .ingest import current_nfl_season
     from .matchup import MatchupSimulator
+    from .scoring import PPR, HALF_PPR, STANDARD
 
-    sim = MatchupSimulator.fit()
-    board = sim.project(season=2024, week=15).reset_index(drop=True)
+    p = argparse.ArgumentParser(
+        prog="python -m ffdata.optimize",
+        description="Weekly win-probability lineup optimizer.")
+    p.add_argument("--week", type=int, required=True, help="NFL week to optimize")
+    p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--roster", required=True,
+                   help="your available players: CSV/txt, one name per line")
+    p.add_argument("--opponent", help="opponent's players (same format); "
+                   "enables win-probability optimization")
+    p.add_argument("--scoring", choices=["ppr", "half", "standard"], default="ppr")
+    p.add_argument("--projector", choices=["gbm", "neural"], default="gbm",
+                   help="gbm is fast; neural is most accurate but slower")
+    p.add_argument("--n-sims", type=int, default=20000)
+    args = p.parse_args()
 
-    # Opponent gets the strong top of the board (I'm the underdog). Build my pool
-    # so a QB stack is actually available: the top QB plus his own receivers, then
-    # a spread of mid-tier players to fill the rest.
-    opp = _assemble(board.head(28))
-    rest = board[~board["player_display_name"].isin(opp["player_display_name"])].reset_index(drop=True)
-    qb = rest[rest["position"] == "QB"].iloc[0]
-    stack = rest[(rest["recent_team"] == qb["recent_team"]) & rest["position"].isin(["QB", "WR", "TE"])]
-    mine = pd.concat([stack, rest.iloc[10:90]]).drop_duplicates("player_display_name")
+    rules = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}[args.scoring]
+    print(f"Projecting {args.season} week {args.week} "
+          f"({args.scoring.upper()}, {args.projector})...", flush=True)
+    sim = MatchupSimulator.fit(projector=args.projector, rules=rules)
+    board = sim.project(args.season, args.week).reset_index(drop=True)
+    if board.empty:
+        raise SystemExit(f"No projections for {args.season} week {args.week}. "
+                         f"Ingest that season first: python -m ffdata.cli --seasons {args.season}")
 
-    opt = LineupOptimizer(sim)
-    corr = opt.optimize(mine, opp, correlated=True)
-    indep = opt.optimize(mine, opp, correlated=False)
+    pool, missing = _match(_load_names(args.roster), board)
+    if missing:
+        print(f"\n[warn] no projection found for: {', '.join(missing)}")
+    if pool.empty:
+        raise SystemExit("None of your roster names matched the projection board.")
 
-    def stack_teams(lineup):
-        pos = mine.set_index("player_display_name")
-        teams = {}
-        for _, n in lineup:
-            r = pos.loc[n]
-            teams.setdefault(r["recent_team"], []).append(r["position"])
-        return [t for t, ps in teams.items() if "QB" in ps and any(p in ("WR", "TE") for p in ps)]
+    if args.opponent:
+        opp_pool, opp_missing = _match(_load_names(args.opponent), board)
+        if opp_missing:
+            print(f"[warn] opponent players not found: {', '.join(opp_missing)}")
+        opp = _assemble(opp_pool)
+        res = LineupOptimizer(sim, n_sims=args.n_sims).optimize(pool, opp)
+        print(f"\nOpponent's best lineup projects {res['opp_proj']} pts.")
+        _print_lineup(f"RECOMMENDED (max win probability {res['optimal_win_prob']*100:.1f}%, "
+                      f"proj {res['optimal_proj']}):", res["optimal_lineup"], board)
+        if res["optimal_lineup"] != res["points_lineup"]:
+            _print_lineup(f"(for reference) max-points lineup "
+                          f"(win {res['points_win_prob']*100:.1f}%, proj {res['points_proj']}):",
+                          res["points_lineup"], board)
+        else:
+            print("\nMax-points lineup is already the highest-win-probability lineup.")
+    else:
+        lineup = LineupOptimizer(sim)._greedy_points(pool)
+        lineup = [(s, n) for s, n, _, _ in lineup]
+        _print_lineup("RECOMMENDED lineup (most projected points):", lineup, board)
+        print("\nTip: pass --opponent to optimize win probability instead of points.")
 
-    print(f"Opponent projected: {corr['opp_proj']}\n")
-    print(f"Max-points lineup       proj={corr['points_proj']}  win%={corr['points_win_prob']*100:.1f}")
-    print(f"Optimal (independent)   proj={indep['optimal_proj']}  win%={indep['optimal_win_prob']*100:.1f}")
-    print(f"Optimal (correlated)    proj={corr['optimal_proj']}  win%={corr['optimal_win_prob']*100:.1f}")
-    print(f"\nQB stacks built -- independent: {stack_teams(indep['optimal_lineup'])}"
-          f" | correlated: {stack_teams(corr['optimal_lineup'])}")
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from ffdata.optimize import LineupOptimizer, DEFAULT_SLOTS, _ELIGIBLE
+from ffdata.optimize import LineupOptimizer, DEFAULT_SLOTS, _ELIGIBLE, _norm, _load_names, _match
 
 
 class _FakeSampler:
@@ -82,3 +82,27 @@ def test_optimize_uses_the_joint_correlated_sampler_when_available():
     res = LineupOptimizer(_FakeSimCorr(), n_sims=100).optimize(pool, opp, correlated=True)
     assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
     assert 0.0 <= res["optimal_win_prob"] <= 1.0
+
+
+# --- CLI helpers ---
+
+def test_norm_ignores_case_punctuation_and_suffixes():
+    assert _norm("Patrick Mahomes II") == "patrick mahomes"
+    assert _norm("Ja'Marr Chase") == "jamarr chase"
+    assert _norm("A.J. Brown") == "aj brown"
+    assert _norm("Michael Pittman Jr.") == "michael pittman"
+
+
+def test_load_names_reads_lines_and_skips_header(tmp_path):
+    f = tmp_path / "roster.csv"
+    f.write_text("player\nJosh Allen\nJa'Marr Chase\n\nBijan Robinson\n")
+    assert _load_names(str(f)) == ["Josh Allen", "Ja'Marr Chase", "Bijan Robinson"]
+
+
+def test_match_resolves_loosely_and_reports_misses():
+    board = pd.DataFrame({
+        "player_display_name": ["Josh Allen", "Ja'Marr Chase", "A.J. Brown"],
+        "position": ["QB", "WR", "WR"], "pred": [22.0, 18.0, 15.0]})
+    matched, missing = _match(["josh allen", "AJ Brown", "Nobody Here"], board)
+    assert set(matched["player_display_name"]) == {"Josh Allen", "A.J. Brown"}
+    assert missing == ["Nobody Here"]
