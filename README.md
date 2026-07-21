@@ -106,6 +106,11 @@ Validated: `score(weekly, PPR)` matches nflverse's precomputed
    the default projector in `matchup.py`. `ffdata/optimize.py` — picks the
    roster that maximizes win probability, not projected points, using the
    calibrated Monte Carlo.)
+7. ~~Same-game correlation~~
+   (`ffdata/correlation.py` — a Gaussian copula over same-game players. The
+   QB<->own-receiver "stack" residual correlation is +0.20 in the data, so
+   independent sampling understated a stack's variance by ~30%. The copula
+   restores it without shifting any player's calibrated marginal.)
 
 **What we learned:** across six independent tests — a neural model, a stacked
 ensemble, and every rich data source (Next Gen Stats, PFR advanced, play-by-play
