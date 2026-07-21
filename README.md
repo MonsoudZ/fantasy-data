@@ -95,11 +95,14 @@ correlation. A roster file is one player name per line (see `examples/`). Add
 
 For large-field contests, `--mode tournament` maximizes the lineup's **ceiling**
 (a high quantile of its own distribution) instead of beating one opponent —
-`--ceiling 0.97` targets the top ~3%. (Honest note: with our data-measured
-correlations, pure ceiling-optimization stacks only marginally — the +0.20
-QB-receiver correlation is diluted across an 8-player lineup while the projection
-cost of stacking is direct. Real DFS stacking is driven substantially by
-ownership/leverage, which needs data nflverse doesn't ship.)
+`--ceiling 0.97` targets the top ~3%. Pure ceiling-optimization stacks only
+marginally, though (the +0.20 QB-receiver correlation is diluted across an
+8-player lineup while the projection cost of stacking is direct).
+
+`--mode stack` is the DFS-style answer: it builds the best-ceiling lineup
+*around a game stack* — a QB + `--stack-size` of his receivers + `--bringback`
+opponent receivers — concentrating several correlations so the fat right tail
+survives. This is how real DFS optimizers enforce stack rules.
 
 ## Find player-prop edges
 

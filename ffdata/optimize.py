@@ -177,6 +177,98 @@ class LineupOptimizer:
                     "stacks": _qb_stacks(rows, pool)}
         return {"quantile": quantile, "points": summary(base), "optimal": summary(lineup)}
 
+    def _fill_forced(self, pool: pd.DataFrame, forced: list) -> list | None:
+        """Build a valid lineup that MUST include `forced` names; fill the rest by
+        projection. Returns None if the forced players can't fit the slots."""
+        pos = pool.set_index("player_display_name")["position"].to_dict()
+        pred = pool.set_index("player_display_name")["pred"].to_dict()
+        slots = list(self.slots)
+        assign, used = [None] * len(slots), set()
+        for name in forced:  # place forced players first (natural slot, then FLEX)
+            p = pos.get(name)
+            if p is None or name in used:
+                return None
+            spots = ([i for i, s in enumerate(slots) if s == p and assign[i] is None]
+                     + [i for i, s in enumerate(slots)
+                        if s == "FLEX" and assign[i] is None and p in _ELIGIBLE["FLEX"]])
+            if not spots:
+                return None
+            assign[spots[0]] = name
+            used.add(name)
+        for i, s in enumerate(slots):  # fill the remaining slots greedily by pred
+            if assign[i] is not None:
+                continue
+            for _, r in pool.sort_values("pred", ascending=False).iterrows():
+                nm = r["player_display_name"]
+                if nm not in used and r["position"] in _ELIGIBLE[s]:
+                    assign[i] = nm
+                    used.add(nm)
+                    break
+            if assign[i] is None:
+                return None
+        return [[slots[i], assign[i], pos[assign[i]], float(pred[assign[i]])] for i in range(len(slots))]
+
+    def optimize_game_stack(self, pool: pd.DataFrame, quantile: float = 0.95,
+                            stack_size: int = 2, bringback: int = 1, max_qbs: int = 8) -> dict:
+        """Best CEILING lineup built AROUND a game stack -- how real DFS tools work.
+
+        A game stack concentrates correlated players (a QB + `stack_size` of his
+        own receivers + `bringback` receivers from the opponent) instead of one
+        diluted pair, so multiple positive correlations compound into a genuinely
+        fatter right tail. We enumerate each candidate QB's stack, fill the rest
+        of the lineup to maximize the ceiling, and keep the best; the max-points
+        lineup is returned alongside for the tradeoff.
+
+        FINDING: this builds a real stack (QB + own receivers + bring-back), but
+        at data-measured correlations even a concentrated 4-player game stack has
+        a LOWER ceiling than the unconstrained max-points lineup -- forcing a
+        non-optimal QB + a lesser receiver costs ~10 projected pts, which the
+        correlation boost can't recover even at the 95th pct. Consistent across
+        pure-ceiling, elite-pair, and game-stack tests: stacking doesn't win on
+        raw ceiling with our correlations. Its real value is *leverage* (being
+        different from the field), which needs DFS ownership data. Use this mode
+        to impose a stack as a deliberate leverage play and get the best lineup
+        within it -- exactly how DFS optimizers apply stack rules.
+        """
+        pool = pool.reset_index(drop=True)
+        draws, n_pool = self._draw(pool, None, correlated=True)
+        names = pool["player_display_name"].tolist()
+        vecs = {names[i]: draws[i] for i in range(n_pool)}
+        q = quantile * 100
+        ceiling = lambda ns: float(np.percentile(np.sum([vecs[x] for x in ns], axis=0), q))
+
+        best = None
+        for _, qb in pool[pool["position"] == "QB"].sort_values("pred", ascending=False).head(max_qbs).iterrows():
+            mates = pool[(pool["recent_team"] == qb["recent_team"])
+                         & pool["position"].isin(["WR", "TE"])].sort_values("pred", ascending=False)
+            opps = pool[(pool["recent_team"] == qb["opponent_team"])
+                        & pool["position"].isin(["WR", "TE"])].sort_values("pred", ascending=False)
+            if len(mates) < stack_size or len(opps) < bringback:
+                continue
+            forced = ([qb["player_display_name"]] + list(mates.head(stack_size)["player_display_name"])
+                      + list(opps.head(bringback)["player_display_name"]))
+            lineup = self._fill_forced(pool, forced)
+            if lineup is None:
+                continue
+            c = ceiling([x[1] for x in lineup])
+            if best is None or c > best[0]:
+                best = (c, lineup, qb["player_display_name"], qb["recent_team"], forced)
+
+        def summary(rows):
+            t = np.sum([vecs[x[1]] for x in rows], axis=0)
+            return {"lineup": [(s, n) for s, n, _, _ in rows],
+                    "proj": round(sum(x[3] for x in rows), 1),
+                    "ceiling": round(float(np.percentile(t, q)), 1),
+                    "median": round(float(np.median(t)), 1),
+                    "stacks": _qb_stacks(rows, pool)}
+        pts = summary(self._greedy_points(pool))
+        if best is None:
+            return {"quantile": quantile, "stack": None, "points": pts, "optimal": pts}
+        _, lineup, qb_name, team, forced = best
+        out = summary(lineup)
+        out["stack"] = {"qb": qb_name, "team": team, "members": forced}
+        return {"quantile": quantile, "points": pts, "optimal": out}
+
 
 def _qb_stacks(lineup: list, pool: pd.DataFrame) -> list:
     """Teams in the lineup fielding a QB plus at least one of his pass-catchers."""
@@ -270,12 +362,17 @@ def main() -> None:
     p.add_argument("--season", type=int, default=current_nfl_season())
     p.add_argument("--roster", required=True,
                    help="your available players: CSV/txt, one name per line")
-    p.add_argument("--mode", choices=["h2h", "tournament"], default="h2h",
-                   help="h2h: beat one opponent (floor); tournament: max ceiling (stacks)")
+    p.add_argument("--mode", choices=["h2h", "tournament", "stack"], default="h2h",
+                   help="h2h: beat one opponent; tournament: max ceiling; "
+                   "stack: best ceiling built around a QB game stack")
     p.add_argument("--opponent", help="opponent's players (h2h mode); "
                    "enables win-probability optimization")
     p.add_argument("--ceiling", type=float, default=0.90,
-                   help="tournament mode: which quantile to maximize (default 0.90)")
+                   help="tournament/stack mode: which quantile to maximize")
+    p.add_argument("--stack-size", type=int, default=2,
+                   help="stack mode: same-team receivers to pair with the QB")
+    p.add_argument("--bringback", type=int, default=1,
+                   help="stack mode: opponent receivers to bring back")
     p.add_argument("--scoring", choices=["ppr", "half", "standard"], default="ppr")
     p.add_argument("--projector", choices=["gbm", "neural"], default="gbm",
                    help="gbm is fast; neural is most accurate but slower")
@@ -298,7 +395,20 @@ def main() -> None:
         raise SystemExit("None of your roster names matched the projection board.")
 
     opt = LineupOptimizer(sim, n_sims=args.n_sims)
-    if args.mode == "tournament":
+    if args.mode == "stack":
+        res = opt.optimize_game_stack(pool, quantile=args.ceiling,
+                                      stack_size=args.stack_size, bringback=args.bringback)
+        best, pts = res["optimal"], res["points"]
+        pct = int(args.ceiling * 100)
+        if best.get("stack"):
+            s = best["stack"]
+            print(f"\nGame stack: {s['team']} {s['qb']} + {', '.join(s['members'][1:])}")
+        _print_lineup(f"STACK lineup (max {pct}th-pct ceiling {best['ceiling']}, "
+                      f"proj {best['proj']}, median {best['median']}):", best["lineup"], board)
+        print(f"\nvs max-points lineup: ceiling {pts['ceiling']}, proj {pts['proj']} "
+              f"-- the stack trades {round(pts['proj']-best['proj'],1)} proj for "
+              f"{round(best['ceiling']-pts['ceiling'],1):+} ceiling.")
+    elif args.mode == "tournament":
         res = opt.optimize_tournament(pool, quantile=args.ceiling)
         pts, best = res["points"], res["optimal"]
         pct = int(args.ceiling * 100)

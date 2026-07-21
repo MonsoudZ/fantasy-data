@@ -84,6 +84,26 @@ def test_tournament_returns_valid_lineup_and_never_lowers_the_ceiling():
     assert isinstance(res["optimal"]["stacks"], list)
 
 
+def test_game_stack_builds_a_qb_receiver_stack():
+    # Pool with a KC QB + two KC receivers, plus fillers from other games.
+    rows = [("KC_QB", "QB", 22, "KC", "LV"), ("KC_WR1", "WR", 15, "KC", "LV"),
+            ("KC_TE", "TE", 12, "KC", "LV"), ("LV_WR", "WR", 13, "LV", "KC"),
+            ("RB_a", "RB", 16, "SF", "SEA"), ("RB_b", "RB", 15, "DAL", "NYG"),
+            ("RB_c", "RB", 12, "GB", "CHI"), ("WR_x", "WR", 17, "MIA", "BUF"),
+            ("WR_y", "WR", 16, "PHI", "WAS"), ("QB2", "QB", 20, "BUF", "MIA")]
+    pool = pd.DataFrame(rows, columns=["player_display_name", "position", "pred",
+                                       "recent_team", "opponent_team"])
+    res = LineupOptimizer(_FakeSimCorr(), n_sims=200).optimize_game_stack(
+        pool, quantile=0.9, stack_size=2, bringback=1)
+    stack = res["optimal"]["stack"]
+    assert stack is not None
+    # The stack must be a QB + 2 own receivers + 1 opponent receiver.
+    assert stack["qb"] == "KC_QB" and stack["team"] == "KC"
+    assert "KC" in res["optimal"]["stacks"]           # QB + own receiver present
+    names = [n for _, n in res["optimal"]["lineup"]]
+    assert {"KC_QB", "KC_WR1", "KC_TE", "LV_WR"}.issubset(names)
+
+
 def test_optimize_uses_the_joint_correlated_sampler_when_available():
     pool = _pool().assign(recent_team="KC", opponent_team="LV")
     opp = pd.DataFrame([("O", "QB", 50, "SF", "SEA")],
