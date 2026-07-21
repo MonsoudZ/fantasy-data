@@ -1,0 +1,10 @@
+# Core data lake + scoring
+pandas>=2.0
+pyarrow>=14
+duckdb>=1.0
+
+# Projections + matchup simulation (ffdata/projections.py, ffdata/matchup.py)
+# lightgbm needs an OpenMP runtime: `brew install libomp` on macOS.
+lightgbm>=4.0
+scikit-learn>=1.3
+scipy>=1.10
