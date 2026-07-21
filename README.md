@@ -93,6 +93,20 @@ correlation. A roster file is one player name per line (see `examples/`). Add
 `--projector neural` for the most accurate projections (slower); drop
 `--opponent` to just get the highest-projected starters.
 
+## Find player-prop edges
+
+```bash
+python -m ffdata.props --week 15 --props examples/props.csv
+```
+
+Prices a table of prop lines (`player,market,line,over_odds,under_odds`) against
+per-stat projections and reports the **+EV** bets. Each market
+(passing/receiving/rushing yards, receptions, passing TDs) has its own model;
+P(over) comes from out-of-sample residuals, **validated calibrated to nominal
+within ~2-3 points cross-season** — so the edges are honest. nflverse ships no
+prop odds, so you supply the lines (export or type them in); the engine and its
+calibration are what this provides.
+
 ## Roadmap
 
 1. ~~Historical dataset + ingestion~~ (this repo)
@@ -124,6 +138,13 @@ correlation. A roster file is one player name per line (see `examples/`). Add
    QB<->own-receiver "stack" residual correlation is +0.20 in the data, so
    independent sampling understated a stack's variance by ~30%. The copula
    restores it without shifting any player's calibrated marginal.)
+8. ~~Player-prop edge finder~~
+   (`ffdata/props.py` — a per-stat model per market (passing/receiving/rushing
+   yards, receptions, passing TDs); P(over) from out-of-sample residuals,
+   validated calibrated to nominal within ~2-3 pts cross-season. Prices
+   user-supplied prop lines into +EV bets. Props are softer than game lines, so
+   this is the market our projections might actually beat — but you bring the
+   odds; nflverse has none.)
 
 **What we learned:** across six independent tests — a neural model, a stacked
 ensemble, and every rich data source (Next Gen Stats, PFR advanced, play-by-play
