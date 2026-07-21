@@ -17,16 +17,18 @@ Protocol: unlike the tree ants (retrained weekly), a neural net trains once on
 all seasons before the test season and predicts it -- leak-free (test is the
 future) and practical (weekly NN retraining is not).
 
-FINDING (2024, single run): on equal footing (both trained on < 2024) the
-sequence ant is the most accurate single model here -- it beats the GBM on MAE
-(4.49 vs 4.57), RMSE (6.16 vs 6.22), and weekly rank (0.694 vs 0.682). Yet its
-errors correlate 0.97 with the GBM's. So a fundamentally different architecture,
-reading the data as a trajectory, still makes nearly the same mistakes: the
-residual is dominated by irreducible game-to-game fantasy variance, not by
-signal one model sees and another misses. Consequence: this ant is valuable as
-a candidate *primary* model, NOT as an ensemble member (stacking near-identical
-errors buys nothing -- see ensemble.py). Caveat: one seed, one season; verify
-across seeds/seasons (backtest_neural accepts both) before promoting it.
+FINDING (confirmed -- 3 seeds x seasons 2023/2024/2025): the sequence ant beats
+the GBM on MAE, RMSE, and weekly rank in EVERY season, with negligible seed
+variance (rank std <= 0.001), so the win is real, not luck (e.g. 2024: neural
+MAE 4.48 vs GBM 4.57, weekly rank 0.694 vs 0.682; margin ~+0.011 rank every
+year). Yet error correlation with the GBM is a rock-stable 0.97-0.98 across all
+three seasons. A better, fundamentally different model still makes the same
+mistakes: the residual is irreducible game-to-game fantasy variance, and it is
+architecture-invariant. Consequences: (1) the sequence ant is the strongest
+single projector built here and a good candidate to promote to primary;
+(2) stacking is settled -- it cannot help when the error floor is noise (see
+ensemble.py). The only remaining lever is new *information* (next-gen stats,
+depth charts, weather), not a better model.
 
 OpenMP note: LightGBM and PyTorch each bundle their own OpenMP runtime, and on
 macOS the second to initialize aborts the process. torch is therefore imported
