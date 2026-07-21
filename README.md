@@ -104,6 +104,19 @@ marginally, though (the +0.20 QB-receiver correlation is diluted across an
 opponent receivers — concentrating several correlations so the fat right tail
 survives. This is how real DFS optimizers enforce stack rules.
 
+### Web UI
+
+```bash
+pip install fastapi "uvicorn[standard]"
+python -m ffdata.web        # -> http://127.0.0.1:8000
+```
+
+A polished browser front-end over all of the above: pick week/scoring/mode,
+search the full slate of ~300 projectable players (or paste your roster), and
+get the recommended lineup with its win probability or ceiling. "Full slate"
+optimizes over every player (DFS); the first run for a scoring type trains the
+model (~2 min), then it's instant.
+
 ## Find player-prop edges
 
 ```bash

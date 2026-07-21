@@ -12,3 +12,6 @@ scipy>=1.10
 # Optional: the neural ant (ffdata/neural.py) needs PyTorch. Not required for
 # the core pipeline, projections, matchups, or the edge finder.
 #   pip install torch
+
+# Optional: the web UI (ffdata/web.py) needs FastAPI + a server.
+#   pip install fastapi "uvicorn[standard]"
