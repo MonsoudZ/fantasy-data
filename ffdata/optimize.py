@@ -12,10 +12,13 @@ This is where the projection work pays off despite the irreducible accuracy
 floor: you can't out-predict the noise, but you can make better *decisions*
 under it.
 
-Method: sample each candidate player's weekly outcome once, with common random
-numbers (every lineup is judged on identical draws, so comparisons are low-
-variance), then hill-climb over slot swaps to maximize simulated
-P(my_total > opp_total).
+Method: draw the whole candidate pool (and the opponent) ONCE, jointly, through
+the correlated sampler (correlation.py) -- so a QB and his own receivers share
+their real +0.20 correlation, and every lineup is judged on identical draws
+(common random numbers, low-variance comparisons). Then hill-climb over slot
+swaps to maximize simulated P(my_total > opp_total). Because the draw is
+correlated, the optimizer now sees a stack's true ceiling and will build one
+when chasing win probability as an underdog -- the whole point of stacking.
 
     from ffdata.matchup import MatchupSimulator
     from ffdata.optimize import LineupOptimizer
@@ -42,10 +45,21 @@ class LineupOptimizer:
         self.slots = list(slots)
         self.n_sims = n_sims
 
-    def _sample(self, players: pd.DataFrame) -> dict:
-        """One outcome vector per player (common random numbers across lineups)."""
-        return {r["player_display_name"]: self.sim.sampler.sample(r["position"], r["pred"], self.n_sims)
-                for _, r in players.iterrows()}
+    def _draw(self, pool: pd.DataFrame, opp: pd.DataFrame, correlated: bool):
+        """Joint outcome matrix over pool + opponent. Rows align to concat order.
+
+        Correlated (default) draws same-game players together via the copula, so
+        stacks carry their real variance; falls back to independent per-player
+        sampling if no correlated sampler or game context is available.
+        """
+        combined = pd.concat([pool, opp], ignore_index=True)
+        cs = getattr(self.sim, "csampler", None)
+        if correlated and cs is not None and "opponent_team" in combined.columns:
+            draws = cs.sample(combined, self.n_sims)
+        else:
+            draws = np.vstack([self.sim.sampler.sample(r["position"], r["pred"], self.n_sims)
+                               for _, r in combined.iterrows()])
+        return draws, len(pool)
 
     def _greedy_points(self, pool: pd.DataFrame) -> list:
         """Fill each slot with the highest-projected eligible unused player."""
@@ -65,10 +79,14 @@ class LineupOptimizer:
         my = np.sum([vecs[n] for n in names], axis=0)
         return float((my > opp_total).mean() + 0.5 * (my == opp_total).mean())
 
-    def optimize(self, pool: pd.DataFrame, opp_lineup: pd.DataFrame) -> dict:
+    def optimize(self, pool: pd.DataFrame, opp_lineup: pd.DataFrame,
+                 correlated: bool = True) -> dict:
         """Return the max-points lineup vs the win-probability-optimal lineup."""
-        vecs = self._sample(pool)
-        opp_total = np.sum(list(self._sample(opp_lineup).values()), axis=0)
+        pool = pool.reset_index(drop=True)
+        draws, n_pool = self._draw(pool, opp_lineup, correlated)
+        names = pool["player_display_name"].tolist()
+        vecs = {names[i]: draws[i] for i in range(n_pool)}
+        opp_total = draws[n_pool:].sum(axis=0)
 
         base = self._greedy_points(pool)
         base_names = [x[1] for x in base]
@@ -125,14 +143,30 @@ if __name__ == "__main__":
     sim = MatchupSimulator.fit()
     board = sim.project(season=2024, week=15).reset_index(drop=True)
 
-    # Opponent gets the strong top of the board; I get a weaker pool (underdog),
-    # where chasing win probability should favor ceiling over safe points.
-    opp = _assemble(board.head(40))
-    mine = board[~board["player_display_name"].isin(opp["player_display_name"])].iloc[20:120]
+    # Opponent gets the strong top of the board (I'm the underdog). Build my pool
+    # so a QB stack is actually available: the top QB plus his own receivers, then
+    # a spread of mid-tier players to fill the rest.
+    opp = _assemble(board.head(28))
+    rest = board[~board["player_display_name"].isin(opp["player_display_name"])].reset_index(drop=True)
+    qb = rest[rest["position"] == "QB"].iloc[0]
+    stack = rest[(rest["recent_team"] == qb["recent_team"]) & rest["position"].isin(["QB", "WR", "TE"])]
+    mine = pd.concat([stack, rest.iloc[10:90]]).drop_duplicates("player_display_name")
 
-    res = LineupOptimizer(sim).optimize(mine, opp)
-    print(f"Opponent projected: {res['opp_proj']}\n")
-    print(f"Max-points lineup   proj={res['points_proj']}  win%={res['points_win_prob']*100:.1f}")
-    print(f"Win-prob-optimal    proj={res['optimal_proj']}  win%={res['optimal_win_prob']*100:.1f}")
-    changed = [n for (s, n) in res["optimal_lineup"] if (s, n) not in res["points_lineup"]]
-    print(f"\nSwaps the optimizer made vs max-points: {changed}")
+    opt = LineupOptimizer(sim)
+    corr = opt.optimize(mine, opp, correlated=True)
+    indep = opt.optimize(mine, opp, correlated=False)
+
+    def stack_teams(lineup):
+        pos = mine.set_index("player_display_name")
+        teams = {}
+        for _, n in lineup:
+            r = pos.loc[n]
+            teams.setdefault(r["recent_team"], []).append(r["position"])
+        return [t for t, ps in teams.items() if "QB" in ps and any(p in ("WR", "TE") for p in ps)]
+
+    print(f"Opponent projected: {corr['opp_proj']}\n")
+    print(f"Max-points lineup       proj={corr['points_proj']}  win%={corr['points_win_prob']*100:.1f}")
+    print(f"Optimal (independent)   proj={indep['optimal_proj']}  win%={indep['optimal_win_prob']*100:.1f}")
+    print(f"Optimal (correlated)    proj={corr['optimal_proj']}  win%={corr['optimal_win_prob']*100:.1f}")
+    print(f"\nQB stacks built -- independent: {stack_teams(indep['optimal_lineup'])}"
+          f" | correlated: {stack_teams(corr['optimal_lineup'])}")

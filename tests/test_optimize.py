@@ -12,8 +12,20 @@ class _FakeSampler:
         return np.full(n, float(pred))
 
 
+class _FakeCorrSampler:
+    """Joint sampler: deterministic constant draws, matrix aligned to rows."""
+    def sample(self, players, n):
+        return np.array([np.full(n, float(p)) for p in players["pred"]])
+
+
 class _FakeSim:
     sampler = _FakeSampler()
+    csampler = None
+
+
+class _FakeSimCorr:
+    sampler = _FakeSampler()
+    csampler = _FakeCorrSampler()
 
 
 def _pool():
@@ -61,3 +73,12 @@ def test_optimize_returns_valid_lineups_and_never_worse_than_points():
     # Hill-climb starts from the points lineup, so it can never end up worse.
     assert res["optimal_win_prob"] >= res["points_win_prob"]
     assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
+
+
+def test_optimize_uses_the_joint_correlated_sampler_when_available():
+    pool = _pool().assign(recent_team="KC", opponent_team="LV")
+    opp = pd.DataFrame([("O", "QB", 50, "SF", "SEA")],
+                       columns=["player_display_name", "position", "pred", "recent_team", "opponent_team"])
+    res = LineupOptimizer(_FakeSimCorr(), n_sims=100).optimize(pool, opp, correlated=True)
+    assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
+    assert 0.0 <= res["optimal_win_prob"] <= 1.0
