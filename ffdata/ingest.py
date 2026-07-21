@@ -23,6 +23,25 @@ from .sources import SOURCES
 RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 UA = {"User-Agent": "ff-data-ingest/0.1"}
 
+# Offensive positions kept from the (all-position) weekly file.
+_OFFENSE = {"QB", "RB", "WR", "TE", "FB"}
+
+
+def _normalize_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    """Map nflverse's `stats_player_week` file onto the schema our code expects.
+
+    The new asset renamed a couple of columns and now includes every position
+    (defense, kickers). Rename them back and keep offensive players only.
+    """
+    df = df.rename(columns={"team": "recent_team", "passing_interceptions": "interceptions"})
+    if "position" in df.columns:
+        df = df[df["position"].isin(_OFFENSE)].reset_index(drop=True)
+    return df
+
+
+# Per-dataset transforms applied after download, before writing parquet.
+NORMALIZERS = {"weekly": _normalize_weekly}
+
 
 def current_nfl_season(today: dt.date | None = None) -> int:
     """NFL seasons are labeled by their starting year; new data begins ~Sept."""
@@ -36,13 +55,15 @@ def _download(url: str) -> bytes:
         return resp.read()
 
 
-def _fetch_to_parquet(url: str, dest: Path) -> int:
+def _fetch_to_parquet(url: str, dest: Path, normalize=None) -> int:
     """Fetch a remote csv/parquet and store it as parquet. Returns row count."""
     blob = _download(url)
     if url.endswith(".csv"):
         df = pd.read_csv(io.BytesIO(blob), low_memory=False)
     else:
         df = pd.read_parquet(io.BytesIO(blob))
+    if normalize is not None:
+        df = normalize(df)
     dest.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(dest, index=False)
     return len(df)
@@ -73,7 +94,7 @@ def ingest(
                 log(f"  skip  {dest.relative_to(RAW.parent.parent)} (cached)")
                 continue
             try:
-                rows = _fetch_to_parquet(url, dest)
+                rows = _fetch_to_parquet(url, dest, normalize=NORMALIZERS.get(name))
                 log(f"  ok    {name}{suffix}: {rows:,} rows")
             except Exception as exc:  # noqa: BLE001 - report and continue
                 log(f"  FAIL  {name}{suffix}: {exc}", file=sys.stderr)

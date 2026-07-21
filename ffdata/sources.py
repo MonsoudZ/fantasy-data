@@ -13,8 +13,12 @@ NFLDATA = "https://github.com/nflverse/nfldata/raw/master/data"
 SOURCES = {
     # One row per player per week: rushing/receiving/passing volume and
     # efficiency, target share, air yards, plus precomputed fantasy points.
+    # nflverse migrated this asset from `player_stats/player_stats_{season}`
+    # to `stats_player/stats_player_week_{season}` (the old path stopped
+    # publishing new seasons). The new file bundles all positions and renames
+    # a couple of columns, so it is normalized on ingest (see NORMALIZERS).
     "weekly": {
-        "url": f"{NFLVERSE}/player_stats/player_stats_{{season}}.parquet",
+        "url": f"{NFLVERSE}/stats_player/stats_player_week_{{season}}.parquet",
         "seasonal": True,
     },
     # Full play-by-play (~48k rows/season, 380+ cols). Only needed once you
