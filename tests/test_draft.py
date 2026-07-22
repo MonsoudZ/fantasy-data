@@ -4,7 +4,7 @@ import pandas as pd
 
 from conftest import requires_data_lake
 
-from ffdata.draft import (_replacement_ranks, best_available, keeper_value, trade_value,
+from ffdata.draft import (_replacement_ranks, best_available, injury_context, keeper_value, trade_value,
                           round_cost, DEFAULT_LEAGUE)
 
 
@@ -99,3 +99,73 @@ def test_player_context_describes_the_room():
     moved = board[board["moved"]]
     assert (moved["team"] != moved["prior_team"]).all()
     assert board["pass_rate"].dropna().between(0.3, 0.8).all()
+
+
+def _inj_con(rows, roster=None):
+    """A DuckDB with just the two views injury_context reads."""
+    import duckdb
+    con = duckdb.connect()
+    con.register("injuries", pd.DataFrame(
+        [(2025, *r) for r in rows],
+        columns=["season", "gsis_id", "team", "week", "game_type",
+                 "report_status", "report_primary_injury"]))
+    con.register("rosters", pd.DataFrame(
+        roster or [], columns=["season", "gsis_id", "status"]))
+    return con
+
+
+def test_injury_context_flags_who_limped_out_of_the_season():
+    """`ended_hurt` must key off the TEAM's last week, not the player's own last
+    report -- measured against his own reports it is trivially true for everyone.
+    KC plays to week 22, so a week-5 injury is long healed by then."""
+    con = _inj_con([
+        ("late", "KC", 20, "DIV", "Out", "Knee"),
+        ("late", "KC", 21, "CON", "Out", "Knee"),
+        ("late", "KC", 21, "CON", "Out", "Knee"),   # 2nd report, same game week
+        ("early", "KC", 5, "REG", "Out", "Ankle"),
+        ("healthy", "KC", 22, "SB", None, None),    # sets KC's finish at wk 22
+    ])
+    c = injury_context(2026, con=con).set_index("player_id")
+
+    assert c.loc["late", "ended_hurt"]
+    assert not c.loc["early", "ended_hurt"]
+    # Distinct weeks: the duplicate week-21 report must not double-count.
+    assert c.loc["late", "weeks_out"] == 2
+    assert c.loc["late", "last_injury"] == "Knee" and c.loc["late", "last_round"] == "CON"
+    # Never listed Out -> no injury note at all.
+    assert "healthy" not in c.index or pd.isna(c.loc["healthy", "last_injury"])
+
+
+def test_injury_context_ignores_absences_that_are_not_injuries():
+    """The report doubles as an absence log. A personal matter isn't a health
+    risk, and an illness resolves in days -- neither predicts Week 1 availability,
+    though a missed game is still a missed game."""
+    con = _inj_con([
+        ("sick", "KC", 18, "REG", "Out", "Illness"),
+        ("personal", "KC", 18, "REG", "Out", "Not injury related - personal matter"),
+        ("hurt", "KC", 18, "REG", "Out", "Hamstring"),
+    ])
+    c = injury_context(2026, con=con).set_index("player_id")
+
+    assert "personal" not in c.index                  # dropped outright
+    assert not c.loc["sick", "ended_hurt"]            # counted, but not a flag
+    assert c.loc["sick", "weeks_out"] == 1
+    assert c.loc["hurt", "ended_hurt"]                # the real one still fires
+
+
+def test_injury_context_reports_current_roster_status():
+    """The freshest signal in July isn't last December -- it's a player still
+    sitting on IR right now. It must surface even with no injury history."""
+    con = _inj_con([], roster=[(2026, "ir", "RES"), (2026, "gone", "RET"),
+                               (2026, "fine", "ACT")])
+    c = injury_context(2026, con=con).set_index("player_id")
+
+    assert c.loc["ir", "status"] == "on injured reserve"
+    assert c.loc["gone", "status"] == "retired"
+    assert "fine" not in c.index                      # ACT is not a note
+
+
+def test_injury_context_survives_a_lake_without_injuries():
+    import duckdb
+    empty = injury_context(2026, con=duckdb.connect())
+    assert empty.empty and "ended_hurt" in empty.columns

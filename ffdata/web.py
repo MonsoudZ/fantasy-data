@@ -362,6 +362,18 @@ def _player_ctx(season: int) -> dict:
             "pass_rate": (None if pd.isna(r["pass_rate"]) else float(r["pass_rate"])),
             "new_coach": bool(r["new_coach"]),
         }
+        # Health rides along, but only when there's something to say -- an empty
+        # `inj` key is what the UI uses to decide whether to show the flag at all.
+        inj = {
+            "weeks_out": (None if pd.isna(r["weeks_out"]) else int(r["weeks_out"])),
+            "injury": (None if pd.isna(r["last_injury"]) else str(r["last_injury"])),
+            "week": (None if pd.isna(r["last_week"]) else int(r["last_week"])),
+            "round": (None if pd.isna(r["last_round"]) else str(r["last_round"])),
+            "ended_hurt": bool(r["ended_hurt"]),
+            "status": (None if pd.isna(r["status"]) else str(r["status"])),
+        }
+        if inj["injury"] or inj["status"]:
+            out[r["player_id"]]["inj"] = inj
     return out
 
 

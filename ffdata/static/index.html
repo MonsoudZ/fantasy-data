@@ -123,6 +123,18 @@
   .rk-ctx { font-size:11.5px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; }
   .rk-ctx b { color:var(--text); font-weight:700; }
   .rk-good { color:var(--good); font-weight:700; } .rk-bad { color:var(--warn); font-weight:700; }
+  /* Injury flag. Amber = missed time last year, red = still not available now. */
+  .inj-badge { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px;
+    font-size:10px; font-weight:800; font-style:italic; font-family:Georgia,serif; cursor:help;
+    border-radius:50%; margin-left:6px; vertical-align:middle; color:#08122a; background:var(--warn); }
+  .inj-badge.sev { background:var(--bad,#ff5c7a); }
+  /* Fixed-position so it escapes the board's scroll container instead of being
+     clipped by it; JS places it against the badge on hover. */
+  #tip { position:fixed; z-index:99; display:none; max-width:270px; padding:9px 11px;
+    background:#0b1226; border:1px solid var(--line); border-radius:9px; box-shadow:var(--shadow);
+    font-size:11.5px; line-height:1.5; color:var(--text); pointer-events:none; }
+  #tip .t-hd { font-weight:800; margin-bottom:3px; }
+  #tip .t-sub { color:var(--muted); }
   .draftbtn { border:1px solid var(--line); background:#0e1530; color:var(--accent2); font-weight:700;
     font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer; }
   .draftbtn:hover { background:var(--accent); color:#fff; border-color:transparent; }
@@ -365,6 +377,7 @@ fetch("/api/config").then(r=>r.json()).then(c=>{
   if(c.season){ ["l-season","pr-season","g-season"].forEach(i=>{ const e=$("#"+i); if(e) e.value=c.season; }); }
   const ds = c.draft_season || c.season;
   if(ds){ const e=$("#d-season"); if(e) e.value=ds; }
+  CFG.season = ds;                       // injury notes cite the season BEFORE this
   CFG.advice=!!c.advice;
 }).catch(()=>{});
 
@@ -535,6 +548,23 @@ function renderBoard(){
   // projection only sees his own past numbers, so this is where a drafter learns
   // that a big "vacated" figure sits behind an entrenched starter, or that a
   // move landed him on a run-first offense.
+  // Injury flag + the text behind it. A season projection silently assumes 17
+  // games; this is the asterisk on that assumption.
+  const injBadge = p => {
+    const j = p.ctx && p.ctx.inj; if(!j) return "";
+    const sev = j.status || j.ended_hurt;      // unavailable now, or limped out
+    const L = [];
+    if(j.status) L.push(`Currently <b>${j.status}</b>`);
+    if(j.injury){
+      const rd = j.round && j.round!=="REG" ? ` (${j.round})` : "";
+      L.push(`Last ruled out wk ${j.week}${rd} — <b>${j.injury}</b>`);
+    }
+    if(j.weeks_out) L.push(`Missed <b>${j.weeks_out}</b> game${j.weeks_out>1?"s":""} in ${CFG.season-1}`);
+    if(j.ended_hurt) L.push(`Ended the season hurt — rehab runs into the offseason, so a Week 1 return isn't a given.`);
+    if(!L.length) return "";
+    const body = `<div class="t-hd">Injury</div><div class="t-sub">${L.join("<br>")}</div>`;
+    return `<span class="inj-badge${sev?" sev":""}" data-tip="${body.replace(/"/g,"&quot;")}">i</span>`;
+  };
   const ctxRow = p => {
     const c = p.ctx, r = p.rookie;
     if(!c && !r) return "";
@@ -557,12 +587,33 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
   $("#d-drafted").innerHTML = arr.length? arr.map(k=>`<span class="chip">${(D._names&&D._names[k])||k}<span class="x" data-k="${k}">✕</span></span>`).join("") : `<span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span>`;
   document.querySelectorAll("#d-drafted .x").forEach(x=>x.onclick=()=>{ D.drafted.delete(x.dataset.k); renderBoard(); renderDrafted(); }); }
+
+/* ---- hover tooltip ----
+   Delegated on document so it keeps working across every board re-render, and
+   fixed-positioned so the board's scroll container can't clip it. */
+const TIP = document.createElement("div"); TIP.id = "tip"; document.body.appendChild(TIP);
+function showTip(el){
+  TIP.innerHTML = el.dataset.tip; TIP.style.display = "block";
+  const r = el.getBoundingClientRect(), t = TIP.getBoundingClientRect();
+  // Prefer above-right; flip when that would run off the top or right edge.
+  let left = Math.min(r.left, innerWidth - t.width - 10);
+  let top = r.top - t.height - 8;
+  if(top < 8) top = r.bottom + 8;
+  TIP.style.left = Math.max(8, left) + "px"; TIP.style.top = top + "px";
+}
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-tip]"); if(el) showTip(el);
+});
+document.addEventListener("mouseout", e => {
+  if(e.target.closest("[data-tip]")) TIP.style.display = "none";
+});
+document.addEventListener("scroll", () => { TIP.style.display = "none"; }, true);
 
 /* ---- saved leagues ---- */
 let LEAGUES=[];

@@ -26,6 +26,7 @@ skips them (they need a draft-capital model).
 
 from __future__ import annotations
 
+import duckdb
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
@@ -575,6 +576,109 @@ if __name__ == "__main__":
     print(avail[["player", "position", "proj", "vor", "auction"]].to_string(index=False))
 
 
+# Roster codes that mean "not currently available", worst-first. `status` on the
+# target-season roster is the freshest health signal we have in the offseason --
+# it reflects TODAY, not last December.
+_INACTIVE_STATUS = {
+    "RET": "retired",
+    "RES": "on injured reserve",
+    "PUP": "on PUP",
+    "NFI": "non-football injury",
+    "E14": "exempt",
+    "CUT": "released",
+    "SUS": "suspended",
+}
+# Designations that actually cost a player the game. "Questionable" does not --
+# most Questionable players suit up, so treating it as a red flag would light up
+# half the league every week.
+_MISSED = ("Out", "Doubtful")
+# Costs a game but resolves in days, so it says nothing about Week 1 availability
+# -- still counted in weeks_out (he did miss it), never flagged as ending hurt.
+_TRANSIENT = ("Illness",)
+
+
+def injury_context(target_season: int, con=None) -> pd.DataFrame:
+    """How last season ENDED for each player, plus how he sits right now.
+
+    A season-total projection quietly assumes a full season. It can't tell you
+    that a guy tore something in the divisional round and won't be back until
+    November -- the projection just says "he scored 240 last year". This does:
+
+      * weeks_out    -- games he was ruled Out/Doubtful for last season
+      * last_injury  -- body part on his most recent Out/Doubtful report
+      * last_week    -- and when, with the round (REG/WC/DIV/CON/SB)
+      * ended_hurt   -- that report came in his team's final two weeks, i.e. he
+                        limped out of the season rather than getting an offseason
+      * status       -- current roster status if he isn't ACT (IR, PUP, retired)
+
+    `status` is the one that matters most in July: it's a live snapshot, so a
+    player still on IR now is a player whose rehab is running long.
+
+    Context only, like the rest of `player_context` -- the injury report is a
+    coach's strategic document as much as a medical one, and modeling it as a
+    feature would mostly fit team-level reporting habits.
+    """
+    con = con or connect()
+    prior = target_season - 1
+    try:
+        inj = con.sql(
+            "select gsis_id as player_id, team, week, game_type, report_status, "
+            "report_primary_injury from injuries where season = ?",
+            params=[prior],
+        ).df()
+    except duckdb.CatalogException:
+        # The dataset simply isn't in the lake: degrade to no notes. Narrower than
+        # `except Exception` on purpose -- a renamed upstream column should raise
+        # here rather than silently blanking every player's health.
+        return pd.DataFrame(columns=["player_id", "weeks_out", "last_injury",
+                                     "last_week", "last_round", "ended_hurt", "status"])
+
+    out = pd.DataFrame(columns=["player_id"])
+    if not inj.empty:
+        inj = inj.dropna(subset=["player_id", "week"])
+        # The report doubles as a personal-absence log; those aren't health risks.
+        body = inj["report_primary_injury"].fillna("")
+        hurt = inj[inj["report_status"].isin(_MISSED)
+                   & ~body.str.contains("Not injury related", case=False)]
+        # A team's last week depends on how far it went (18 if it missed the
+        # playoffs, 22 if it reached the Super Bowl), so "ended the season hurt"
+        # only means anything measured against that team's OWN finish -- not the
+        # player's last report, which would be trivially true for everyone.
+        team_last = inj.groupby("team")["week"].max()
+        season_last = inj["week"].max()
+        if not hurt.empty:
+            last = hurt.sort_values("week").groupby("player_id").tail(1)
+            out = last[["player_id", "team", "week", "game_type", "report_primary_injury"]].rename(
+                columns={"week": "last_week", "game_type": "last_round",
+                         "report_primary_injury": "last_injury"})
+            # Distinct weeks: a player can appear on several daily reports per game.
+            out["weeks_out"] = out["player_id"].map(
+                hurt.groupby("player_id")["week"].nunique())
+            # Ruled out in his team's final fortnight: no healthy game followed, so
+            # he carried the injury into the offseason instead of rehabbing in it.
+            finish = out["team"].map(team_last).fillna(season_last)
+            out["ended_hurt"] = ((out["last_week"] >= (finish - 1))
+                                 & ~out["last_injury"].isin(_TRANSIENT))
+            out = out.drop(columns=["team"])
+
+    status = con.sql(
+        "select gsis_id as player_id, any_value(status) as status from rosters "
+        "where season = ? and gsis_id is not null group by gsis_id",
+        params=[target_season],
+    ).df()
+    status = status[status["status"].isin(_INACTIVE_STATUS)]
+    out = out.merge(status, on="player_id", how="outer")
+    out["status"] = out["status"].map(_INACTIVE_STATUS)
+    # A player can be known only from the roster (on IR, no report rows), so the
+    # injury columns may never have been created -- pin the schema either way.
+    out = out.reindex(columns=["player_id", "weeks_out", "last_injury", "last_week",
+                               "last_round", "ended_hurt", "status"])
+    for c in ("weeks_out", "last_week"):
+        out[c] = out[c].astype("Float64")
+    out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
+    return out.reset_index(drop=True)
+
+
 def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
     """Situation context for every projectable player -- the room he's in.
 
@@ -644,6 +748,10 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     out = out.merge(cc[["team", "new_coach"]], on="team", how="left")
     out["new_coach"] = out["new_coach"].fillna(False)
 
+    out = out.merge(injury_context(target_season, con), on="player_id", how="left")
+    out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
+
     cols = ["player_id", "team", "prior_team", "moved", "blocked_by", "blocked_by_fp",
-            "vacated_fp", "depth_rank", "pass_rate", "new_coach"]
+            "vacated_fp", "depth_rank", "pass_rate", "new_coach",
+            "weeks_out", "last_injury", "last_week", "last_round", "ended_hurt", "status"]
     return out[cols].drop_duplicates("player_id").reset_index(drop=True)

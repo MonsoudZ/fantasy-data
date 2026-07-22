@@ -138,6 +138,25 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   because it's all one join: DJ Moore CHI→BUF shows up as Rome Odunze's 262
   vacated AND as the man now blocking Khalil Shakir. Also context only, never a
   model input.
+- **Health is the asterisk on every season projection** (`draft.injury_context`,
+  the hover "i" on each board row). A season total silently assumes 17 games; the
+  flag says when that's a stretch — `weeks_out`, the body part and round of his
+  last Out/Doubtful report, `ended_hurt`, and current roster `status`. Three
+  things it gets right that a naive version wouldn't:
+  - `ended_hurt` is measured against **the team's** last week (18 if it missed the
+    playoffs, 22 if it reached the Super Bowl), not the player's own last report —
+    against his own it's trivially true for everyone. Getting this wrong flagged
+    418 of 768 players; correct, it's 160.
+  - The report doubles as an **absence log**. "Not injury related — personal
+    matter" is dropped outright, and `Illness` still counts as a missed game but
+    never sets `ended_hurt` — a week-18 flu says nothing about Week 1.
+  - `status` on the target-season roster (RES/PUP/RET) is the freshest signal we
+    have in July: a live snapshot, not last December. It surfaces even for players
+    with no injury history at all.
+  Only skill-position rows join (96.8% on gsis_id); the 31% overall rate is just
+  `injuries` covering linemen and defense that `weekly` never kept. Context only,
+  like the rest — the injury report is a coach's strategic document as much as a
+  medical one, so as a feature it would mostly fit team reporting habits.
 - `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
   rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
   teams silently lose all team context.
