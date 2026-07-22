@@ -12,6 +12,7 @@ after that, projections and optimization are seconds.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,7 @@ from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD
+from .store import League, delete_league, list_leagues, save_league
 
 _log = logging.getLogger("ffdata.web")
 
@@ -244,6 +246,42 @@ def api_props(req: PropsRequest):
     return {"ok": True, "priced": len(edges),
             "edges": edges.to_dict("records"),
             "markets": sorted({m for m in prop_df["market"].unique()})}
+
+
+# --------------------------------------------------------------------------- #
+# Saved leagues (persisted config + draft state; see ffdata/store.py)
+# --------------------------------------------------------------------------- #
+
+class LeagueModel(BaseModel):
+    name: str
+    season: int = Field(ge=1999, le=2100)
+    scoring: str = "ppr"
+    teams: int = Field(12, ge=2, le=32)
+    drafted: list[str] = []
+    keepers: list = []
+
+
+class LeagueName(BaseModel):
+    name: str
+
+
+@app.get("/api/leagues")
+def api_leagues():
+    return {"ok": True, "leagues": [asdict(lg) for lg in list_leagues()]}
+
+
+@app.post("/api/leagues")
+def api_league_save(req: LeagueModel):
+    try:
+        lg = save_league(League(**req.model_dump()))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "league": asdict(lg)}
+
+
+@app.post("/api/leagues/delete")
+def api_league_delete(req: LeagueName):
+    return {"ok": True, "deleted": delete_league(req.name)}
 
 
 def main() -> None:

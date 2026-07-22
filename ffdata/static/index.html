@@ -180,8 +180,15 @@
           <div class="seg" id="d-scoring">
             <button data-v="ppr" class="on">PPR</button><button data-v="half">Half</button><button data-v="standard">Standard</button>
           </div>
+          <label>Saved league</label>
+          <select id="d-league"><option value="">— new / unsaved —</option></select>
+          <div class="row" style="margin-top:8px">
+            <input type="text" id="d-lgname" placeholder="name to save as…" style="flex:1" />
+            <button type="button" id="d-save" class="draftbtn">Save</button>
+            <button type="button" id="d-del" class="draftbtn">Delete</button>
+          </div>
           <button class="go" id="d-go">Load draft board</button>
-          <div class="hint">VOR &amp; auction values reflect the scoring above. First load trains the season model (~20 s).</div>
+          <div class="hint">VOR &amp; auction values reflect the scoring above. Save keeps season, scoring, teams &amp; who's drafted. First load trains the season model (~20 s).</div>
           <label>Drafted <span id="d-count" style="text-transform:none;color:var(--muted)"></span></label>
           <div class="drafted" id="d-drafted"><span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span></div>
         </div>
@@ -318,6 +325,39 @@ function renderBoard(){
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
   $("#d-drafted").innerHTML = arr.length? arr.map(k=>`<span class="chip">${(D._names&&D._names[k])||k}<span class="x" data-k="${k}">✕</span></span>`).join("") : `<span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span>`;
   document.querySelectorAll("#d-drafted .x").forEach(x=>x.onclick=()=>{ D.drafted.delete(x.dataset.k); renderBoard(); renderDrafted(); }); }
+
+/* ---- saved leagues ---- */
+let LEAGUES=[];
+async function refreshLeagues(select){
+  try{ LEAGUES=(await (await fetch("/api/leagues")).json()).leagues||[]; }catch(e){ LEAGUES=[]; }
+  const cur = select!==undefined ? select : $("#d-league").value;
+  $("#d-league").innerHTML = `<option value="">— new / unsaved —</option>` +
+    LEAGUES.map(l=>`<option value="${l.name.replace(/"/g,'&quot;')}">${l.name} · ${l.scoring.toUpperCase()} · ${l.teams}tm · '${String(l.season).slice(2)}</option>`).join("");
+  if(cur) $("#d-league").value = cur;
+}
+$("#d-league").onchange=()=>{
+  const l = LEAGUES.find(x=>x.name===$("#d-league").value); if(!l) return;
+  $("#d-season").value=l.season; $("#d-teams").value=l.teams; $("#d-lgname").value=l.name;
+  document.querySelectorAll("#d-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===l.scoring));
+  D.scoring=l.scoring;
+  D.drafted=new Set(l.drafted.map(norm)); D._names={}; l.drafted.forEach(n=>D._names[norm(n)]=n);
+  renderDrafted(); if(D.board.length) loadDraft();
+};
+$("#d-save").onclick=async()=>{
+  const name=$("#d-lgname").value.trim(); if(!name){ $("#d-lgname").focus(); return; }
+  const drafted=[...D.drafted].map(k=>(D._names&&D._names[k])||k);
+  const body={ name, season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, drafted };
+  const r=await (await fetch("/api/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+  if(!r.ok){ alert(r.error||"could not save league"); return; }
+  await refreshLeagues(name);
+};
+$("#d-del").onclick=async()=>{
+  const name=$("#d-league").value||$("#d-lgname").value.trim(); if(!name) return;
+  if(!confirm(`Delete saved league “${name}”?`)) return;
+  await fetch("/api/leagues/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+  $("#d-lgname").value=""; await refreshLeagues("");
+};
+refreshLeagues();
 
 /* ============ PROPS ============ */
 $("#pr-sample").onclick=()=>{ $("#pr-lines").value=`player,market,line,over_odds,under_odds

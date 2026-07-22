@@ -62,3 +62,32 @@ def test_parse_props_skips_header_and_malformed_rows():
     df = _parse_props(text)
     assert list(df["player"]) == ["Josh Allen"]
     assert df.iloc[0]["line"] == 250.5
+
+
+def test_league_crud_via_api(tmp_path, monkeypatch):
+    # Point the store at a temp file so the test never touches ~/.ff-data.
+    monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    c = TestClient(app)
+
+    assert c.get("/api/leagues").json() == {"ok": True, "leagues": []}
+
+    saved = c.post("/api/leagues", json={"name": "Home", "season": 2025,
+                                         "scoring": "half", "teams": 10,
+                                         "drafted": ["Bijan Robinson"]}).json()
+    assert saved["ok"] and saved["league"]["scoring"] == "half"
+    assert saved["league"]["drafted"] == ["Bijan Robinson"]
+
+    listed = c.get("/api/leagues").json()["leagues"]
+    assert len(listed) == 1 and listed[0]["name"] == "Home"
+
+    # Store-level validation surfaces as ok:false; pydantic bounds as 422.
+    assert c.post("/api/leagues", json={"name": "X", "season": 2025,
+                                        "scoring": "superflex"}).json()["ok"] is False
+    assert c.post("/api/leagues", json={"name": "Y", "season": 2025,
+                                        "teams": 999}).status_code == 422
+
+    assert c.post("/api/leagues/delete", json={"name": "home"}).json()["deleted"] is True
+    assert c.get("/api/leagues").json()["leagues"] == []
