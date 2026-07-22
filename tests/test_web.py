@@ -211,6 +211,28 @@ def test_compare_endpoint(monkeypatch):
                                         "players": ["Josh Allen"]}).json()["error"].startswith("Pick at least")
 
 
+def test_games_endpoint(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    board = pd.DataFrame([{
+        "game": "LV @ KC", "home": "KC", "away": "LV",
+        "total_line": 45.0, "pred_total": 50.0, "total_lean": "over",
+        "model_over": 0.62, "mkt_over": 0.5,
+        "spread_line": 3.0, "pred_margin": 7.0, "spread_lean": "KC",
+        "model_home_cover": 0.58, "mkt_home_cover": 0.52,
+        "model_home_win": 0.65, "mkt_home_win": 0.58, "ml_lean": "KC",
+    }])
+    monkeypatch.setattr(web, "game_forecasts", lambda *a, **k: board)
+    web._GAMES.clear()
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+    r = c.post("/api/games", json={"season": 2099, "week": 15}).json()
+    assert r["ok"] and r["games"][0]["total_lean"] == "over" and r["games"][0]["ml_lean"] == "KC"
+    assert c.post("/api/games", json={"season": 2099, "week": 99}).status_code == 422
+
+
 def test_dynasty_endpoint(monkeypatch):
     import pandas as pd
 

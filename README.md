@@ -176,7 +176,10 @@ A polished, tabbed browser front-end over the whole toolkit:
   Tools under the board: **keeper** surplus (value − cost, by auction $ or draft
   round), **trade** evaluation (value per side + verdict), and **compare** up to
   3 players side by side (proj / VOR / auction / rank, best-value flagged).
-- **Prop edges** — paste sportsbook prop lines, get the +EV bets ranked.
+- **Betting** — two views. **Player props**: paste sportsbook prop lines, get the
+  +EV bets ranked. **Game lines**: our total/spread/moneyline forecast beside the
+  market (lines from the schedule, nothing to paste) — informational, since game
+  markets are efficient; a sanity check on the line, not a profitable edge.
 
 Saved leagues and teams persist locally (`~/.ff-data/`, or `$FFDATA_STATE`), so
 you set up once and come back to them.

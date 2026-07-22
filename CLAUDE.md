@@ -28,8 +28,9 @@ Network access required (nflverse pulls over HTTP).
 | `matchup.py` | Monte Carlo lineup win-prob; residual sampler |
 | `correlation.py` | Gaussian copula for same-game correlation |
 | `optimize.py` | lineup optimizer (h2h / tournament / stack) + weekly CLI |
-| `betting.py` | American-odds / de-vig math + empirical P(over), shared by props |
+| `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
+| `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
 | `draft.py` | preseason season projections, VOR, snake/auction, keepers, trades, rookies |
 | `dynasty.py` | age curves (delta method) + multi-year dynasty value |
 | `store.py` | JSON persistence for saved leagues + lineup teams (incl. custom scoring) |
@@ -67,8 +68,10 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - Monte Carlo intervals are **calibrated to ~1pt** out of sample; prop P(over) to
   ~2-3pt. Same-game QB↔receiver residual correlation is **+0.20**.
 - **Game betting markets are efficient** to a public-data model (no edge survives
-  the vig). The game-line edge finder that established this was **pruned as a
-  dead-end**; its reusable odds math survives in `betting.py`. Props *might* be
+  the vig). The bet-tracking *edge finder* was pruned; the game models live on in
+  `gamelines.py` as an **informational forecast-vs-market view** (totals/spread/
+  moneyline, lines straight from `schedules`) — a sanity check on the line, not a
+  profitable edge. Reusable odds math is in `betting.py`. Props *might* be
   beatable but need a real odds source (nflverse has none).
 - The **stacked ensemble ("colony")** was a dead-end too — stacking can't beat the
   irreducible floor when models err ~0.97-correlated — and was **removed**. Finding

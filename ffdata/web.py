@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, trade_value
 from .dynasty import dynasty_board
 from .features import build_features
+from .gamelines import game_forecasts
 from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match, _norm
@@ -41,6 +42,7 @@ _SIMS: dict = {}
 _BOARDS: dict = {}
 _DRAFT: dict = {}
 _DYN: dict = {}
+_GAMES: dict = {}
 _FEATS: dict = {}
 _STATIC = Path(__file__).parent / "static"
 
@@ -377,6 +379,28 @@ def api_dynasty(req: DynastyRequest):
                 "dynasty_value": round(float(r["dynasty_value"]), 1)}
                for _, r in out.head(req.n).iterrows()]
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
+
+
+class GamesRequest(BaseModel):
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    week: int = Field(ge=1, le=22)
+
+
+@app.post("/api/games")
+def api_games(req: GamesRequest):
+    """Game-line forecasts vs the market for a week (totals/spreads/moneylines)."""
+    key = (req.season, req.week)
+    try:
+        if key not in _GAMES:
+            _cache_put(_GAMES, key, game_forecasts(req.season, req.week))
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("game_forecasts failed (%s)", key)
+        return {"ok": False, "error": "could not build game forecasts (see server logs)"}
+    board = _GAMES[key]
+    if board.empty:
+        return {"ok": False, "error": f"No game lines for {req.season} week {req.week}. "
+                "Ingest schedules first."}
+    return {"ok": True, "count": len(board), "games": board.to_dict("records")}
 
 
 class PropsRequest(BaseModel):

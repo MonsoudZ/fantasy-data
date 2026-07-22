@@ -126,7 +126,7 @@
     <div class="tabs">
       <button class="tab on" data-tab="lineup">Lineup</button>
       <button class="tab" data-tab="draft">Draft board</button>
-      <button class="tab" data-tab="props">Prop edges</button>
+      <button class="tab" data-tab="props">Betting</button>
     </div>
   </header>
 
@@ -248,20 +248,38 @@
       </div>
     </div>
 
-    <!-- ============ PROPS ============ -->
+    <!-- ============ BETTING ============ -->
     <div class="panel" id="p-props">
-      <div class="grid">
-        <div class="card">
-          <div class="row">
-            <div style="flex:1"><label>Week</label><input type="number" id="pr-week" min="1" max="22" value="15" /></div>
-            <div style="flex:1"><label>Season</label><input type="number" id="pr-season" value="2024" /></div>
+      <div class="seg" id="b-mode" style="max-width:340px;margin:0 auto 18px">
+        <button data-v="props" class="on">Player props</button><button data-v="games">Game lines</button>
+      </div>
+      <div id="b-props">
+        <div class="grid">
+          <div class="card">
+            <div class="row">
+              <div style="flex:1"><label>Week</label><input type="number" id="pr-week" min="1" max="22" value="15" /></div>
+              <div style="flex:1"><label>Season</label><input type="number" id="pr-season" value="2024" /></div>
+            </div>
+            <label>Prop lines <button type="button" id="pr-sample" class="chip-btn">load sample</button></label>
+            <textarea id="pr-lines" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105&#10;Josh Allen,passing_yards,244.5,-110,-110"></textarea>
+            <div class="hint">Markets: passing_yards · passing_tds · receiving_yards · receptions · rushing_yards. You bring the odds.</div>
+            <button class="go" id="pr-go">Find +EV edges</button>
           </div>
-          <label>Prop lines <button type="button" id="pr-sample" class="chip-btn">load sample</button></label>
-          <textarea id="pr-lines" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105&#10;Josh Allen,passing_yards,244.5,-110,-110"></textarea>
-          <div class="hint">Markets: passing_yards · passing_tds · receiving_yards · receptions · rushing_yards. You bring the odds.</div>
-          <button class="go" id="pr-go">Find +EV edges</button>
+          <div class="card" id="pr-out"><div class="empty"><div class="big">📈</div>Paste prop lines and find your edges.<div class="hint" style="margin-top:8px">First run trains per-stat models (~2 min).</div></div></div>
         </div>
-        <div class="card" id="pr-out"><div class="empty"><div class="big">📈</div>Paste prop lines and find your edges.<div class="hint" style="margin-top:8px">First run trains per-stat models (~2 min).</div></div></div>
+      </div>
+      <div id="b-games" style="display:none">
+        <div class="grid">
+          <div class="card">
+            <div class="row">
+              <div style="flex:1"><label>Week</label><input type="number" id="g-week" min="1" max="22" value="15" /></div>
+              <div style="flex:1"><label>Season</label><input type="number" id="g-season" value="2024" /></div>
+            </div>
+            <button class="go" id="g-go">Load game lines</button>
+            <div class="hint">Our forecast beside the market's total, spread &amp; moneyline — lines come from the schedule, nothing to paste. <b>Informational:</b> game markets are efficient, so read it as a sanity check, not a green light.</div>
+          </div>
+          <div class="card" id="g-out"><div class="empty"><div class="big">🎯</div>Load a week to see our forecast vs the lines.<div class="hint" style="margin-top:8px">First run trains the game models (~20 s).</div></div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -279,7 +297,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
 function seg(id, cb){ document.querySelectorAll(`#${id} button`).forEach(b=>b.onclick=()=>{
   document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.remove("on")); b.classList.add("on"); cb&&cb(b.dataset.v); }); }
 
-fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season"].forEach(i=>$("#"+i).value=c.season); } }).catch(()=>{});
+fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } }).catch(()=>{});
 
 /* ============ LINEUP ============ */
 const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
@@ -552,6 +570,48 @@ function renderProps(d){
   R.innerHTML=`<div class="headline"><div><div class="lab">Priced ${d.edges.length} props</div><div class="val" style="font-size:26px">${d.edges.filter(e=>e.ev_per_1u>0).length} +EV</div></div><div class="sub">sorted by EV per 1u</div></div>
     <div class="scroll"><table><thead><tr><th>Player</th><th>Market</th><th class="num">Line</th><th class="num">Proj</th><th class="num">Model</th><th class="num">Mkt</th><th>Bet</th><th class="num">EV/1u</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="note">EV uses the odds you supplied. Made-up lines → made-up edges; feed real book lines for real edges.</div>`;
+}
+
+/* ============ GAME LINES ============ */
+seg("b-mode", v=>{ $("#b-props").style.display=v==="props"?"block":"none"; $("#b-games").style.display=v==="games"?"block":"none"; });
+$("#g-go").onclick=async()=>{
+  const btn=$("#g-go"); btn.disabled=true; btn.textContent="Loading…";
+  $("#g-out").innerHTML=`<div class="spinner"><div class="ring"></div>Training game models…</div>`;
+  try{
+    const d=await (await fetch("/api/games",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#g-season").value,week:+$("#g-week").value})})).json();
+    renderGames(d);
+  }catch(e){ $("#g-out").innerHTML=`<div class="err">Request failed.</div>`; }
+  btn.disabled=false; btn.textContent="Reload game lines";
+};
+function renderGames(d){
+  const R=$("#g-out");
+  if(!d.ok){ R.innerHTML=`<div class="err">${d.error}</div>`; return; }
+  if(!d.games.length){ R.innerHTML=`<div class="empty">No games for that week.</div>`; return; }
+  const pct=x=>Math.round(x*100)+"%";
+  const line=(label,detail,modelP,mktP)=>`<li style="grid-template-columns:88px 1fr auto;border-bottom:1px solid rgba(42,55,99,.4);padding:8px 0">
+    <span class="slot">${label}</span><span style="font-size:13px">${detail}</span>
+    <span class="pred" style="font-size:14px">${pct(modelP)}<span class="hint" style="font-weight:400"> vs ${pct(mktP)}</span></span></li>`;
+  const card=x=>{
+    const spread = x.spread_line>0 ? `${x.home} -${x.spread_line}` : `${x.home} +${(-x.spread_line).toFixed(1)}`;
+    const mTot = x.total_lean==="over" ? x.model_over : 1-x.model_over;
+    const kTot = x.total_lean==="over" ? x.mkt_over : 1-x.mkt_over;
+    const homeCov = x.spread_lean===x.home;
+    const mCov = homeCov ? x.model_home_cover : 1-x.model_home_cover;
+    const kCov = homeCov ? x.mkt_home_cover : 1-x.mkt_home_cover;
+    const homeWin = x.ml_lean===x.home;
+    const mWin = homeWin ? x.model_home_win : 1-x.model_home_win;
+    const kWin = homeWin ? x.mkt_home_win : 1-x.mkt_home_win;
+    return `<div class="card" style="padding:14px;margin-bottom:10px">
+      <div class="pname" style="margin-bottom:6px">${x.game}</div>
+      <ul class="lineup" style="margin:0">
+        ${line("TOTAL", `line ${x.total_line} · our ${x.pred_total} — <b style="color:${x.total_lean==='over'?'var(--good)':'var(--warn)'}">${x.total_lean.toUpperCase()}</b>`, mTot, kTot)}
+        ${line("SPREAD", `${spread} · our margin ${x.pred_margin} — <b style="color:var(--accent2)">${x.spread_lean} covers</b>`, mCov, kCov)}
+        ${line("MONEYLINE", `<b>${x.ml_lean}</b> to win`, mWin, kWin)}
+      </ul></div>`;
+  };
+  R.innerHTML=`<div class="headline"><div><div class="lab">${d.games.length} games — forecast vs market</div><div class="val" style="font-size:22px">model % vs line %</div></div><div class="sub">higher model % = our lean</div></div>
+    <div class="scroll">${d.games.map(card).join("")}</div>
+    <div class="note">Game markets are efficient — this is a sanity check on the line, not a profitable edge.</div>`;
 }
 </script>
 </body>
