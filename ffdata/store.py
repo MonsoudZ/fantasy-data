@@ -40,6 +40,9 @@ class League:
     # Optional full custom scoring (ScoringRules field dict). When set it wins
     # over the `scoring` preset label -- how imported leagues keep exact scoring.
     rules: dict | None = None
+    # Optional starting-lineup shape {"starters": {...}, "flex": n, "superflex": n}
+    # (e.g. from a Sleeper import) so VOR reflects the league's real lineup.
+    lineup: dict | None = None
 
     def validated(self) -> "League":
         """Return self after checking fields; raise ValueError on bad input."""
@@ -53,6 +56,8 @@ class League:
             raise ValueError(f"season out of range: {self.season}")
         if self.rules is not None and not isinstance(self.rules, dict):
             raise ValueError("rules must be a scoring field dict or null")
+        if self.lineup is not None and not isinstance(self.lineup, dict):
+            raise ValueError("lineup must be a dict or null")
         return self
 
 

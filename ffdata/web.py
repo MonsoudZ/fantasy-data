@@ -196,18 +196,36 @@ class DraftRequest(BaseModel):
     drafted: list[str] = []
     position: str | None = None
     n: int = Field(50, ge=1, le=500)
-    rules: dict | None = None   # full custom scoring (from an imported league)
+    rules: dict | None = None    # full custom scoring (from an imported league)
+    lineup: dict | None = None   # {starters, flex, superflex} for VOR (imported)
+
+
+def _league_cfg(teams: int, lineup: dict | None) -> dict:
+    """A draft-league config: default lineup unless an imported one is supplied."""
+    cfg = {**DEFAULT_LEAGUE, "teams": teams, "superflex": 0}
+    if lineup:
+        cfg["starters"] = {**DEFAULT_LEAGUE["starters"], **(lineup.get("starters") or {})}
+        cfg["flex"] = int(lineup.get("flex", DEFAULT_LEAGUE["flex"]))
+        cfg["superflex"] = int(lineup.get("superflex", 0))
+    return cfg
+
+
+def _lineup_key(lineup: dict | None):
+    if not lineup:
+        return None
+    return (tuple(sorted((lineup.get("starters") or {}).items())),
+            lineup.get("flex"), lineup.get("superflex"))
 
 
 @app.post("/api/draft")
 def api_draft(req: DraftRequest):
     if req.scoring not in _RULES and not req.rules:
         return {"ok": False, "error": "bad scoring"}
-    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules))
+    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules), _lineup_key(req.lineup))
     try:
         if key not in _DRAFT:
             _cache_put(_DRAFT, key, draft_board(
-                req.season, {**DEFAULT_LEAGUE, "teams": req.teams},
+                req.season, _league_cfg(req.teams, req.lineup),
                 rules=rules_from(req.scoring, req.rules)))
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("draft_board failed (%s)", key)
@@ -274,6 +292,7 @@ class LeagueModel(BaseModel):
     drafted: list[str] = []
     keepers: list = []
     rules: dict | None = None
+    lineup: dict | None = None
 
 
 class LeagueName(BaseModel):

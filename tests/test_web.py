@@ -126,8 +126,19 @@ def test_draft_accepts_custom_rules_past_validation():
     # No data lake here, so it fails building the board -- but it must get PAST
     # scoring validation (not "bad scoring") when custom rules are supplied.
     r = c.post("/api/draft", json={"season": 2024, "teams": 10, "scoring": "custom",
-                                   "rules": {"reception": 1.0, "pass_td": 6.0}}).json()
+                                   "rules": {"reception": 1.0, "pass_td": 6.0},
+                                   "lineup": {"starters": {"QB": 1}, "flex": 1, "superflex": 1}}).json()
     assert r["ok"] is False and r["error"] != "bad scoring"
+
+
+def test_league_cfg_applies_imported_lineup():
+    from ffdata.web import _league_cfg
+    cfg = _league_cfg(10, {"starters": {"QB": 2, "RB": 2}, "flex": 1, "superflex": 1})
+    assert cfg["teams"] == 10 and cfg["superflex"] == 1
+    assert cfg["starters"]["QB"] == 2
+    # unspecified positions fall back to the default lineup
+    assert cfg["starters"]["WR"] == 3
+    assert _league_cfg(12, None)["superflex"] == 0   # default has no superflex
 
 
 def test_sleeper_import_endpoints(tmp_path, monkeypatch):

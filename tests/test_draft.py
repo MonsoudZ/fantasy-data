@@ -43,6 +43,15 @@ def test_replacement_ranks_scale_with_league_size():
     assert big["QB"] > small["QB"]           # more teams -> shallower replacement
 
 
+def test_superflex_deepens_qb_replacement():
+    base = _replacement_ranks(DEFAULT_LEAGUE)                       # 1-QB league
+    sf = _replacement_ranks({**DEFAULT_LEAGUE, "superflex": 1})      # + a superflex slot
+    # A QB-eligible flex makes QB2s startable, so replacement QB gets much deeper
+    # (~a second starting QB per team) -- the whole point for superflex value.
+    assert sf["QB"] == base["QB"] + DEFAULT_LEAGUE["teams"]
+    assert sf["RB"] == base["RB"] and sf["WR"] == base["WR"]         # SF doesn't touch RB/WR
+
+
 def _board():
     return pd.DataFrame({
         "player": ["A", "B", "C", "D", "E"],

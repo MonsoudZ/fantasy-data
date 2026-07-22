@@ -6,7 +6,17 @@ the import orchestration via an injected fake client.
 """
 
 from ffdata.scoring import HALF_PPR, PPR, preset_name, rules_from, rules_to_dict
-from ffdata.sleeper import import_league, list_user_leagues, map_roster, map_scoring
+from ffdata.sleeper import (
+    import_league, list_user_leagues, map_roster, map_roster_positions, map_scoring,
+)
+
+
+def test_map_roster_positions_counts_starters_flex_superflex():
+    positions = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "SUPER_FLEX",
+                 "BN", "BN", "K", "DEF", "IR"]
+    m = map_roster_positions(positions)
+    assert m["starters"] == {"QB": 1, "RB": 2, "WR": 3, "TE": 1}
+    assert m["flex"] == 1 and m["superflex"] == 1     # BN/K/DEF/IR ignored
 
 
 # --- scoring helpers round-trip ---
@@ -86,6 +96,7 @@ def _fixture():
                           "scoring_settings": {"rec": 0.5}, "draft_id": "D1"}],
         "league": {"league_id": "L1", "name": "Home Dynasty", "total_rosters": 10,
                    "scoring_settings": {"rec": 1.0, "bonus_rec_te": 0.5, "pass_td": 6},
+                   "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "SUPER_FLEX", "BN"],
                    "draft_id": "D1"},
         "rosters": [{"owner_id": "u123", "players": ["p1", "p2", "p3"]},
                     {"owner_id": "u999", "players": ["p4"]}],
@@ -106,6 +117,10 @@ def test_import_league_builds_league_and_team():
     assert league.scoring == "custom"               # TE-premium + 6pt pass TD
     assert league.rules["te_reception_bonus"] == 0.5 and league.rules["pass_td"] == 6.0
     assert league.drafted == ["Josh Allen", "CeeDee Lamb"]
+
+    # Starting-lineup shape imported too (this one is superflex).
+    assert league.lineup["superflex"] == 1
+    assert league.lineup["starters"] == {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
 
     # Team: the caller's roster, same scoring, validates cleanly.
     assert team.roster["QB"] == ["Josh Allen"]

@@ -179,8 +179,9 @@ you set up once and come back to them.
 
 **Import from Sleeper.** On the draft tab, type your Sleeper username → pick a
 league → it imports the settings, **exact scoring** (custom scoring like
-TE-premium or 6-pt passing TDs is preserved, not snapped to a preset), your
-roster, and the draft, saving them as a league + team. Sleeper's API is public
+TE-premium or 6-pt passing TDs is preserved, not snapped to a preset), the
+**starting lineup** (so a **superflex / 2-QB** league values QBs correctly, not
+like a shallow 1-QB league), your roster, and the draft — saved as a league + team. Sleeper's API is public
 and read-only, so there's no login. (ESPN needs `espn_s2`/`SWID` cookies and
 Yahoo needs OAuth, so those aren't built.) The mapping is unit-tested; validate
 the live fetch against your own account.

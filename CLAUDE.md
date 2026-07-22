@@ -94,8 +94,10 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   trusting the magnitudes. Degrades to veterans-only if `draft_picks` isn't ingested.
 - **Sleeper import** (`sleeper.py`, web tab): pulls a league by username via
   Sleeper's public read-only API (no auth) → saves a `store.League` (settings,
-  exact custom scoring, drafted) + a `store.Team` (your roster). Custom scoring
-  is preserved as a full `ScoringRules` (stored `rules` dict; label `custom`) and
-  threads through the draft/lineup endpoints. ⚠️ The pure mappers are unit-tested;
+  exact custom scoring, drafted, starting lineup) + a `store.Team` (your roster).
+  Custom scoring is a full `ScoringRules` (stored `rules` dict; label `custom`)
+  and `roster_positions` becomes a `lineup` dict `{starters, flex, superflex}` so
+  VOR is superflex-aware (`_replacement_ranks` deepens QB for SF slots) — both
+  thread through the draft/lineup endpoints. ⚠️ The pure mappers are unit-tested;
   the live HTTP path is **unvalidated** (egress was blocked when built) — confirm
   against a real account. ESPN/Yahoo are not built (unofficial-cookie / OAuth).

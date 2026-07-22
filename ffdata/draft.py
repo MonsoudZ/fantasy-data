@@ -296,7 +296,16 @@ def backtest_rookies(target_season: int, rules: ScoringRules = PPR, con=None) ->
 
 
 def _replacement_ranks(league: dict) -> dict:
-    """The rank at each position below which a player is 'replacement level'."""
+    """The rank at each position below which a player is 'replacement level'.
+
+    Dedicated starter slots set the base; flex/superflex slots deepen it:
+      * FLEX (RB/WR/TE) is spread across those three by their share of demand.
+      * SUPERFLEX (QB-eligible) deepens QB -- a startable QB2 is the scarce asset
+        those slots target, so we treat superflex as ~a second QB slot (the
+        standard VOR approximation; some SF slots do go to RB/WR in practice).
+    This is what makes QB value jump in superflex/2-QB leagues instead of being
+    priced like a shallow 1-QB league.
+    """
     t, s = league["teams"], league["starters"]
     base = {p: t * s.get(p, 0) for p in POSITIONS}
     # spread FLEX slots across RB/WR/TE by their share of starting demand
@@ -305,6 +314,7 @@ def _replacement_ranks(league: dict) -> dict:
     denom = sum(base[p] for p in fx) or 1
     for p in fx:
         base[p] += round(flex_pool * base[p] / denom)
+    base["QB"] += t * league.get("superflex", 0)
     return base
 
 

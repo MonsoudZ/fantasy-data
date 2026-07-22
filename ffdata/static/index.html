@@ -348,13 +348,13 @@ function renderLineup(d){
 }
 
 /* ============ DRAFT ============ */
-const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null };
+const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null, lineup:null };
 seg("d-scoring", v=>{ D.scoring=v; D.rules=null; if(D.board.length) loadDraft(); });   // preset clears any custom rules
 async function loadDraft(){
   const btn=$("#d-go"); btn.disabled=true; btn.textContent="Loading…";
   $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>Training season model…</div>`;
   try{
-    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,rules:D.rules,n:300})})).json();
+    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,rules:D.rules,lineup:D.lineup,n:300})})).json();
     if(!d.ok){ $("#d-board").innerHTML=`<div class="err">${d.error}</div>`; }
     else { D.board=d.players; renderFilters(); renderBoard(); }
   }catch(e){ $("#d-board").innerHTML=`<div class="err">${e}</div>`; }
@@ -387,14 +387,14 @@ $("#d-league").onchange=()=>{
   const l = LEAGUES.find(x=>x.name===$("#d-league").value); if(!l) return;
   $("#d-season").value=l.season; $("#d-teams").value=l.teams; $("#d-lgname").value=l.name;
   document.querySelectorAll("#d-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===l.scoring));
-  D.scoring=l.scoring; D.rules=l.rules||null;
+  D.scoring=l.scoring; D.rules=l.rules||null; D.lineup=l.lineup||null;
   D.drafted=new Set(l.drafted.map(norm)); D._names={}; l.drafted.forEach(n=>D._names[norm(n)]=n);
   renderDrafted(); if(D.board.length) loadDraft();
 };
 $("#d-save").onclick=async()=>{
   const name=$("#d-lgname").value.trim(); if(!name){ $("#d-lgname").focus(); return; }
   const drafted=[...D.drafted].map(k=>(D._names&&D._names[k])||k);
-  const body={ name, season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, rules:D.rules, drafted };
+  const body={ name, season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, rules:D.rules, lineup:D.lineup, drafted };
   const r=await (await fetch("/api/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
   if(!r.ok){ alert(r.error||"could not save league"); return; }
   await refreshLeagues(name);

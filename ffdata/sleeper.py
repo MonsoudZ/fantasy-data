@@ -103,6 +103,26 @@ def map_roster(rosters: list, user_id, players: dict) -> dict:
     return roster
 
 
+def map_roster_positions(positions: list) -> dict:
+    """Sleeper `roster_positions` -> starting-lineup slots for VOR.
+
+    Returns {"starters": {QB/RB/WR/TE counts}, "flex": n, "superflex": n}. Bench
+    (BN), IR, taxi, and K/DEF/IDP slots are ignored -- only the skill starters
+    and flex types shape replacement level. SUPER_FLEX/OP are QB-eligible.
+    """
+    starters = {p: 0 for p in _SKILL}
+    flex = superflex = 0
+    for tok in positions or []:
+        t = str(tok).upper()
+        if t in starters:
+            starters[t] += 1
+        elif t in ("SUPER_FLEX", "SUPERFLEX", "OP"):
+            superflex += 1
+        elif "FLEX" in t:               # FLEX, REC_FLEX, WRRB_FLEX, ...
+            flex += 1
+    return {"starters": starters, "flex": flex, "superflex": superflex}
+
+
 def _pick_names(picks: list, players: dict) -> list[str]:
     names = []
     for pk in picks or []:
@@ -151,9 +171,10 @@ def import_league(league_id: str, username: str, season: int,
 
     picks = client.draft_picks(league_json["draft_id"]) if league_json.get("draft_id") else []
     drafted = _pick_names(picks, players)
+    lineup = map_roster_positions(league_json.get("roster_positions") or [])
 
     league = League(name=name, season=season, teams=teams,
-                    scoring=label, rules=rules_dict, drafted=drafted)
+                    scoring=label, rules=rules_dict, drafted=drafted, lineup=lineup)
     team = Team(name=name, season=season, scoring=label, rules=rules_dict,
                 roster=map_roster(rosters, uid, players))
     return league, team

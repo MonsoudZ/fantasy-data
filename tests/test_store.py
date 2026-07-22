@@ -24,6 +24,16 @@ def test_save_then_get_roundtrips(store):
     assert got.keepers == [["Ja'Marr Chase", 40]]
 
 
+def test_league_custom_rules_and_lineup_roundtrip(store):
+    save_league(League(name="SF", season=2025, scoring="custom",
+                       rules={"reception": 1.0, "pass_td": 6.0},
+                       lineup={"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                               "flex": 1, "superflex": 1}), path=store)
+    got = get_league("sf", path=store)
+    assert got.scoring == "custom" and got.rules["pass_td"] == 6.0
+    assert got.lineup["superflex"] == 1
+
+
 def test_save_overwrites_same_name(store):
     save_league(League(name="Dynasty", season=2025, teams=12), path=store)
     save_league(League(name="dynasty", season=2026, teams=14), path=store)  # same key
