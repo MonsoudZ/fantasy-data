@@ -27,7 +27,8 @@ Network access required (nflverse pulls over HTTP).
 | `neural.py` | GRU sequence projector (`NeuralProjector`); needs torch (lazy-imported) |
 | `matchup.py` | Monte Carlo lineup win-prob; residual sampler |
 | `correlation.py` | Gaussian copula for same-game correlation |
-| `optimize.py` | lineup optimizer (h2h / tournament / stack), superflex slots, free-agent finder + weekly CLI |
+| `optimize.py` | lineup optimizer (h2h / tournament / stack), superflex + DEF/K slots, free-agent finder + weekly CLI |
+| `kdst.py` | kicker + team-defense (DST) scoring & leak-free trailing projections |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
@@ -109,6 +110,23 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the table can never disagree. ⚠️ Prompt assembly + the availability gate are
   unit-tested with a mocked client; the **live API path is unvalidated** (no egress
   when built) — confirm once you set a key.
+- **Kicker + team defense (K/DST)** (`kdst.py`): standard leagues start a K and a
+  DEF (QB/RB/RB/WR/WR/TE/FLEX/DEF/K), so the app scores and projects them.
+  `ScoringRules` gained kicker (distance-laddered FG + PAT + miss) and DST (sack/
+  int/fumble/TD/safety/block + a fixed standard points-allowed tier ladder) fields;
+  `score_kicker`/`score_dst` compute them from raw stats (graceful columns).
+  `project_kdst(season, week, rules)` returns K + DEF board rows via a **trailing
+  average** — the honest model for these near-irreducible positions — leak-free
+  (only prior weeks feed the mean), and `web._board` appends them so the optimizer/
+  free-agent finder can fill the DEF/K slots. Sleeper import now maps K/DEF starter
+  slots + roster (defense stored as `<TEAM> DST` to match the board). ⚠️ Two
+  validation gaps, flagged in the module: kicker distance-bucket **column names**
+  vary by nflverse schema era (falls back to flat `fg_made`), and DST **counting
+  stats** (sacks/takeaways/def TDs) need a defensive box-score source this project
+  doesn't ingest yet — so DST is points-allowed-dominated. The scoring math + leak-
+  free trailing are unit-tested; **magnitudes are UNVALIDATED** (no lake here).
+  Draft-board K/DEF ranking is deliberately **out of scope** (you stream them; VOR
+  is ~flat) — this is a weekly-lineup feature.
 - **Superflex weekly slots** (`optimize.py`): `slots_from_lineup(lineup)` turns a
   `{starters, flex, superflex}` config into the optimizer's slot tuple, adding a
   `SUPERFLEX` slot (QB-eligible) so a 2-QB league optimizes its *real* lineup —

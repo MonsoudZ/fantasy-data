@@ -26,6 +26,7 @@ from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
 from .ingest import FIRST_SEASON, current_nfl_season
+from .kdst import project_kdst
 from .matchup import MatchupSimulator
 from .optimize import (
     LineupOptimizer, _assemble, _match, _norm, free_agent_advice, slots_from_lineup,
@@ -80,7 +81,14 @@ def _board(scoring: str, projector: str, season: int, week: int, rules: dict | N
     sim = _sim(sk, projector, rules_obj)
     key = (sk, projector, season, week)
     if key not in _BOARDS:
-        _cache_put(_BOARDS, key, sim.project(season, week).reset_index(drop=True))
+        board = sim.project(season, week).reset_index(drop=True)
+        # Append kicker + team-defense projections so standard leagues (which
+        # start a K and a DEF) can fill those slots. Empty (a no-op) when the K/
+        # DST data isn't ingested -- the skill board still works on its own.
+        kd = project_kdst(season, week, rules=rules_obj)
+        if not kd.empty:
+            board = pd.concat([board, kd], ignore_index=True)
+        _cache_put(_BOARDS, key, board)
     return sim, _BOARDS[key]
 
 
@@ -615,7 +623,7 @@ class TeamModel(BaseModel):
     season: int = Field(ge=1999, le=2100)
     scoring: str = "ppr"
     projector: str = "gbm"
-    roster: dict = Field(default_factory=lambda: {"QB": [], "RB": [], "WR": [], "TE": []})
+    roster: dict = Field(default_factory=lambda: {"QB": [], "RB": [], "WR": [], "TE": [], "K": [], "DEF": []})
     rules: dict | None = None
 
 

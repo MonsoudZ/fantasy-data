@@ -9,7 +9,7 @@
     --bg:#0b1020; --bg2:#121a33; --card:#161f3d; --card2:#1c274d; --line:#2a3763;
     --text:#e8ecfb; --muted:#93a0c8; --accent:#6366f1; --accent2:#22d3ee; --good:#34d399;
     --warn:#fbbf24; --bad:#f87171;
-    --qb:#f87171; --rb:#34d399; --wr:#60a5fa; --te:#c084fc; --flex:#94a3b8;
+    --qb:#f87171; --rb:#34d399; --wr:#60a5fa; --te:#c084fc; --flex:#94a3b8; --k:#fbbf24; --def:#f472b6;
     --radius:16px; --shadow:0 10px 40px rgba(0,0,0,.35);
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
@@ -59,6 +59,7 @@
   /* position badge */
   .pos { font-size:11px; font-weight:800; text-align:center; padding:4px 0; width:34px; border-radius:7px; color:#08122a; display:inline-block; }
   .pos.QB{background:var(--qb)} .pos.RB{background:var(--rb)} .pos.WR{background:var(--wr)} .pos.TE{background:var(--te)}
+  .pos.K{background:var(--k)} .pos.DEF{background:var(--def)}
   /* roster builder */
   .pgroup { margin-bottom:12px; }
   .pgtop { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
@@ -353,10 +354,15 @@ function mountExplain(containerSel, kind, payload){
 fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } CFG.advice=!!c.advice; }).catch(()=>{});
 
 /* ============ LINEUP ============ */
-const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, superflex:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
-// The canonical superflex lineup: standard starters + one QB-eligible flex slot.
-const SF_LINEUP = { starters:{QB:1,RB:2,WR:2,TE:1}, flex:1, superflex:1 };
-const lineupCfg = () => L.superflex ? SF_LINEUP : null;
+const ROSTER_POS = ["QB","RB","WR","TE","DEF","K"];
+const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, superflex:false,
+  roster:{QB:[],RB:[],WR:[],TE:[],DEF:[],K:[]}, opp:[] };
+// The lineup the tab optimizes: the skill core (+FLEX) plus a defense and a
+// kicker, and a QB-eligible SUPERFLEX slot when the toggle is on. Slots with no
+// rostered player just stay empty, so this is safe for offense-only rosters too.
+function lineupCfg(){
+  return { starters:{QB:1,RB:2,WR:3,TE:1,DEF:1,K:1}, flex:1, superflex:L.superflex?1:0 };
+}
 seg("l-scoring", v=>{ L.scoring=v; L.rules=null; PLAYERS=null; });
 const HINTS={ h2h:"Beat one opponent — balances floor and ceiling.", tournament:"Large field — maximize ceiling.", stack:"Best lineup around a QB game stack." };
 seg("l-mode", v=>{ L.mode=v; $("#l-oppwrap").style.display=v==="h2h"?"block":"none"; });
@@ -374,7 +380,7 @@ async function players(){
   const d=await r.json(); PLAYERS=d.ok?d.players:[]; ploadKey=key; return PLAYERS;
 }
 function renderRoster(){
-  $("#roster-builder").innerHTML = ["QB","RB","WR","TE"].map(pos=>`
+  $("#roster-builder").innerHTML = ROSTER_POS.map(pos=>`
     <div class="pgroup">
       <div class="pgtop"><span class="pos ${pos}">${pos}</span>
         <div class="search" style="flex:1"><input type="text" data-pos="${pos}" class="rsearch" placeholder="+ add ${pos}" autocomplete="off"><div class="results" id="rr-${pos}"></div></div>
@@ -415,8 +421,8 @@ $("#l-team").onchange=()=>{
   $("#l-season").value=t.season; $("#l-teamname").value=t.name; $("#l-proj").value=t.projector||"gbm";
   document.querySelectorAll("#l-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===t.scoring));
   L.scoring=t.scoring; L.rules=t.rules||null;
-  L.roster={QB:[],RB:[],WR:[],TE:[]};
-  ["QB","RB","WR","TE"].forEach(p=>{ if(Array.isArray(t.roster&&t.roster[p])) L.roster[p]=t.roster[p].slice(); });
+  L.roster={QB:[],RB:[],WR:[],TE:[],DEF:[],K:[]};
+  ROSTER_POS.forEach(p=>{ if(Array.isArray(t.roster&&t.roster[p])) L.roster[p]=t.roster[p].slice(); });
   PLAYERS=null; renderRoster();
 };
 $("#l-tsave").onclick=async()=>{
@@ -435,7 +441,7 @@ $("#l-tdel").onclick=async()=>{
 refreshTeams();
 
 $("#l-go").onclick=async()=>{
-  const roster=["QB","RB","WR","TE"].flatMap(p=>L.roster[p]).join("\n");
+  const roster=ROSTER_POS.flatMap(p=>L.roster[p]).join("\n");
   if(!roster && !L.full){ alert("Add some players to your roster first."); return; }
   const btn=$("#l-go"); btn.disabled=true; btn.textContent="Optimizing…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting & optimizing…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
@@ -446,7 +452,7 @@ $("#l-go").onclick=async()=>{
   btn.disabled=false; btn.textContent="Optimize my lineup";
 };
 $("#l-fa-go").onclick=async()=>{
-  const roster=["QB","RB","WR","TE"].flatMap(p=>L.roster[p]).join("\n");
+  const roster=ROSTER_POS.flatMap(p=>L.roster[p]).join("\n");
   if(!roster){ alert("Add your roster first — waiver value is measured against your starters."); return; }
   const btn=$("#l-fa-go"); btn.disabled=true; btn.textContent="Finding…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting the slate & ranking free agents…<br><span class="hint">First run trains the model (~2 min).</span></div>`;

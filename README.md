@@ -117,6 +117,18 @@ slot (QB-eligible flex) is a first-class slot — a second QB can start when tha
 your best lineup. In the web UI it's a one-click **Superflex / 2-QB** toggle; a
 Sleeper import sets it automatically from the league's roster slots.
 
+**Kicker and team defense.** Most leagues start a K and a DEF
+(QB/RB/RB/WR/WR/TE/FLEX/DEF/K), so those are real positions here: you can roster
+them, they're scored from raw stats under your league's rules (distance-laddered
+field goals, the standard points-allowed tiers, sacks/takeaways/defensive TDs),
+and they're projected by a trailing average — the honest model for two positions
+whose week-to-week output is mostly luck. A Sleeper import brings your kicker and
+defense over automatically. *Caveat:* K/DST projection **magnitudes are not yet
+validated against real data**, and team-defense projections are currently driven
+by points allowed (the defensive counting stats need a data source this repo
+doesn't ingest yet) — treat them as a reasonable baseline, not gospel. Drafting
+K/DEF isn't modeled (you stream them; draft value is negligible).
+
 **Waiver / free-agent finder.** On the lineup tab, "Find waiver upgrades" ranks
 available players by **how much they'd add to your starting lineup**, not raw
 projection — for each free agent it recomputes your optimal starters with him in

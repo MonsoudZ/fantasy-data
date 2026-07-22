@@ -324,3 +324,30 @@ def test_freeagents_endpoint(monkeypatch):
 
     # An empty roster is rejected before any projection work.
     assert c.post("/api/freeagents", json={"season": 2099, "week": 5}).json()["error"].startswith("Add your roster")
+
+
+def test_optimize_fills_defense_and_kicker_slots(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    board = pd.DataFrame({
+        "player_display_name": ["Josh Allen", "Bijan Robinson", "Breece Hall", "Jamarr Chase",
+                                "Puka Nacua", "Mike Evans", "Trey McBride",
+                                "BUF DST", "Justin Tucker"],
+        "position": ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "DEF", "K"],
+        "pred": [22.0, 16.0, 13.0, 18.0, 14.0, 9.0, 11.0, 8.0, 7.0],
+        "recent_team": ["BUF", "ATL", "NYJ", "CIN", "LAR", "TB", "ARI", "BUF", "BAL"],
+    })
+    # Default (no-opponent) optimize uses the greedy fill -> no live sim needed.
+    monkeypatch.setattr(web, "_board", lambda *a, **k: (None, board))
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+    roster = "\n".join(board["player_display_name"])
+    r = c.post("/api/optimize", json={
+        "season": 2099, "week": 5, "roster": roster,
+        "lineup": {"starters": {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DEF": 1},
+                   "flex": 1, "superflex": 0}}).json()
+    assert r["ok"]
+    slots = {row["slot"]: row["name"] for row in r["lineup"]}
+    assert slots["DEF"] == "BUF DST" and slots["K"] == "Justin Tucker"

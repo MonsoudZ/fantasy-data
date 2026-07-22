@@ -25,7 +25,8 @@ from .store import League, Team
 
 _BASE = "https://api.sleeper.app/v1"
 _UA = "ff-data-sleeper/0.1"
-_SKILL = ("QB", "RB", "WR", "TE")
+_SKILL = ("QB", "RB", "WR", "TE")            # positions the VOR model ranks
+_ROSTER_POS = ("QB", "RB", "WR", "TE", "K", "DEF")   # positions we roster/start
 
 
 # --------------------------------------------------------------------------- #
@@ -86,34 +87,58 @@ def map_scoring(scoring_settings: dict) -> ScoringRules:
         fumble_lost=float(s.get("fum_lost", -2.0)),
         two_pt=float(s.get("rec_2pt", 2.0)),
         special_teams_td=float(s.get("st_td", 6.0)),
+        # Kicker: Sleeper splits 0-19/20-29/30-39 (all typically 3); use the
+        # 30-39 value as the 0-39 tier. 50p is the 50+ tier; xpm the extra point.
+        fg_0_39=float(s.get("fgm_30_39", 3.0)),
+        fg_40_49=float(s.get("fgm_40_49", 4.0)),
+        fg_50_plus=float(s.get("fgm_50p", 5.0)),
+        pat=float(s.get("xpm", 1.0)),
+        fg_miss=float(s.get("fgmiss", 0.0)),
+        # Team defense. Points-allowed tiers aren't taken from Sleeper yet (we use
+        # the standard ladder); the counting-stat weights are mapped here.
+        dst_sack=float(s.get("sack", 1.0)),
+        dst_int=float(s.get("int", 2.0)),
+        dst_fumble_rec=float(s.get("fum_rec", 2.0)),
+        dst_td=float(s.get("def_td", 6.0)),
+        dst_safety=float(s.get("safe", 2.0)),
+        dst_block=float(s.get("blk_kick", 2.0)),
     )
 
 
 def map_roster(rosters: list, user_id, players: dict) -> dict:
-    """The named skill-position roster owned by `user_id`, by position."""
-    roster = {p: [] for p in _SKILL}
+    """The named roster owned by `user_id`, by position (incl. K and DEF).
+
+    Team defenses in Sleeper are keyed by team abbreviation with position 'DEF';
+    we store them as '<TEAM> DST' to match the projection board's naming.
+    """
+    roster = {p: [] for p in _ROSTER_POS}
     mine = next((r for r in rosters if str(r.get("owner_id")) == str(user_id)), None)
     if not mine:
         return roster
     for pid in (mine.get("players") or []):
         info = players.get(str(pid)) or {}
-        pos, name = info.get("position"), info.get("full_name")
-        if pos in roster and name:
-            roster[pos].append(name)
+        pos = info.get("position")
+        if pos == "DEF":
+            team = info.get("team") or str(pid)
+            roster["DEF"].append(f"{team} DST")
+        elif pos in roster and info.get("full_name"):
+            roster[pos].append(info["full_name"])
     return roster
 
 
 def map_roster_positions(positions: list) -> dict:
-    """Sleeper `roster_positions` -> starting-lineup slots for VOR.
+    """Sleeper `roster_positions` -> starting-lineup slots.
 
-    Returns {"starters": {QB/RB/WR/TE counts}, "flex": n, "superflex": n}. Bench
-    (BN), IR, taxi, and K/DEF/IDP slots are ignored -- only the skill starters
-    and flex types shape replacement level. SUPER_FLEX/OP are QB-eligible.
+    Returns {"starters": {QB/RB/WR/TE/K/DEF counts}, "flex": n, "superflex": n}.
+    Bench (BN), IR, taxi, and IDP slots are ignored. SUPER_FLEX/OP are
+    QB-eligible; DEF/DST and K are counted so standard leagues start them.
     """
-    starters = {p: 0 for p in _SKILL}
+    starters = {p: 0 for p in _ROSTER_POS}
     flex = superflex = 0
     for tok in positions or []:
         t = str(tok).upper()
+        if t in ("DST", "D/ST"):        # normalize Sleeper's defense token to DEF
+            t = "DEF"
         if t in starters:
             starters[t] += 1
         elif t in ("SUPER_FLEX", "SUPERFLEX", "OP"):

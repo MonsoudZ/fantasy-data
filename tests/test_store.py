@@ -91,10 +91,12 @@ def test_team_roundtrips_and_normalizes_roster(teams):
               path=teams)
     got = get_team("my squad", path=teams)
     assert got is not None and got.projector == "neural" and got.scoring == "half"
-    # Missing positions are filled in; only the four skill slots are kept.
-    assert set(got.roster) == {"QB", "RB", "WR", "TE"}
+    # Missing positions are filled in; the standard starting positions are kept
+    # (skill core plus kicker and team defense).
+    assert set(got.roster) == {"QB", "RB", "WR", "TE", "K", "DEF"}
     assert got.roster["QB"] == ["Josh Allen"] and got.roster["RB"] == []
     assert got.roster["WR"] == ["Ja'Marr Chase", "A.J. Brown"]
+    assert got.roster["K"] == [] and got.roster["DEF"] == []
 
 
 def test_team_listing_delete_and_isolation_from_leagues(teams, tmp_path):

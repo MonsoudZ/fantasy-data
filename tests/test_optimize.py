@@ -144,6 +144,22 @@ def test_slots_from_lineup_defaults_and_superflex():
     assert "QB" in _ELIGIBLE["SUPERFLEX"]
 
 
+def test_slots_from_lineup_adds_defense_and_kicker():
+    slots = slots_from_lineup({"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1},
+                               "flex": 1, "superflex": 0})
+    assert slots.count("DEF") == 1 and slots.count("K") == 1
+    assert _ELIGIBLE["K"] == {"K"} and _ELIGIBLE["DEF"] == {"DEF"}
+    # A standard lineup fills its DEF/K from eligible players only.
+    pool = pd.DataFrame([("Bills D", "DEF", 9), ("Justin Tucker", "K", 8),
+                         ("QB1", "QB", 20), ("RB1", "RB", 16), ("RB2", "RB", 14),
+                         ("WR1", "WR", 15), ("WR2", "WR", 13), ("TE1", "TE", 11),
+                         ("WR3", "WR", 12)],
+                        columns=["player_display_name", "position", "pred"])
+    lineup = LineupOptimizer(_FakeSim(), slots=slots, n_sims=50)._greedy_points(pool)
+    placed = {s: n for s, n, _, _ in lineup}
+    assert placed["DEF"] == "Bills D" and placed["K"] == "Justin Tucker"
+
+
 def test_superflex_slot_lets_a_second_qb_start():
     opt = LineupOptimizer(_FakeSim(), slots=slots_from_lineup(
         {"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1, "superflex": 1}), n_sims=50)

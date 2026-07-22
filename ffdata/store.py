@@ -24,7 +24,7 @@ from pathlib import Path
 
 _SCORING = ("ppr", "half", "standard")
 _PROJECTORS = ("gbm", "neural")
-_POSITIONS = ("QB", "RB", "WR", "TE")
+_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
 
 
 @dataclass

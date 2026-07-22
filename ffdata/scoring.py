@@ -30,6 +30,22 @@ class ScoringRules:
     fumble_lost: float = -2.0
     two_pt: float = 2.0
     special_teams_td: float = 6.0
+    # --- Kicker (defaults are the near-universal distance ladder) ---
+    fg_0_39: float = 3.0        # made field goal, 0-39 yds
+    fg_40_49: float = 4.0       # made field goal, 40-49 yds
+    fg_50_plus: float = 5.0     # made field goal, 50+ yds
+    pat: float = 1.0            # made extra point
+    fg_miss: float = 0.0        # missed field goal (some leagues -1)
+    # --- Team defense / special teams (DST) ---
+    dst_sack: float = 1.0
+    dst_int: float = 2.0
+    dst_fumble_rec: float = 2.0
+    dst_td: float = 6.0         # defensive or return TD
+    dst_safety: float = 2.0
+    dst_block: float = 2.0      # blocked kick/punt
+    # Points-allowed uses a fixed standard tier ladder (see kdst._dst_pa_points),
+    # not a per-field weight -- it's a step function, and every mainstream platform
+    # ships the same brackets. Per-bracket customization is a later refinement.
 
 
 PPR = ScoringRules()

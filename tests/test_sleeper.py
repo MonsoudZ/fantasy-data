@@ -15,8 +15,11 @@ def test_map_roster_positions_counts_starters_flex_superflex():
     positions = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "SUPER_FLEX",
                  "BN", "BN", "K", "DEF", "IR"]
     m = map_roster_positions(positions)
-    assert m["starters"] == {"QB": 1, "RB": 2, "WR": 3, "TE": 1}
-    assert m["flex"] == 1 and m["superflex"] == 1     # BN/K/DEF/IR ignored
+    # K and DEF are now real starting slots (standard leagues); BN/IR still ignored.
+    assert m["starters"] == {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DEF": 1}
+    assert m["flex"] == 1 and m["superflex"] == 1
+    # Sleeper's DST token normalizes to DEF.
+    assert map_roster_positions(["DST"])["starters"]["DEF"] == 1
 
 
 # --- scoring helpers round-trip ---
@@ -52,18 +55,21 @@ _PLAYERS = {
     "p2": {"full_name": "Bijan Robinson", "position": "RB"},
     "p3": {"full_name": "Ja'Marr Chase", "position": "WR"},
     "p4": {"full_name": "CeeDee Lamb", "position": "WR"},
-    "DEF1": {"position": "DEF"},         # no full_name / not a skill position
+    "p5": {"full_name": "Justin Tucker", "position": "K"},
+    "BUF": {"position": "DEF", "team": "BUF"},    # team defense: keyed by team, no full_name
 }
 
 
 def test_map_roster_groups_skill_positions_for_the_owner():
-    rosters = [{"owner_id": "u123", "players": ["p1", "p2", "p3", "DEF1"]},
+    rosters = [{"owner_id": "u123", "players": ["p1", "p2", "p3", "p5", "BUF"]},
                {"owner_id": "u999", "players": ["p4"]}]
     roster = map_roster(rosters, "u123", _PLAYERS)
     assert roster["QB"] == ["Josh Allen"]
     assert roster["RB"] == ["Bijan Robinson"]
     assert roster["WR"] == ["Ja'Marr Chase"]     # p4 belongs to the other owner
-    assert roster["TE"] == []                     # DEF dropped
+    assert roster["TE"] == []
+    assert roster["K"] == ["Justin Tucker"]
+    assert roster["DEF"] == ["BUF DST"]          # team defense named to match the board
 
 
 class _FakeClient:
@@ -96,9 +102,10 @@ def _fixture():
                           "scoring_settings": {"rec": 0.5}, "draft_id": "D1"}],
         "league": {"league_id": "L1", "name": "Home Dynasty", "total_rosters": 10,
                    "scoring_settings": {"rec": 1.0, "bonus_rec_te": 0.5, "pass_td": 6},
-                   "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "SUPER_FLEX", "BN"],
+                   "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "SUPER_FLEX",
+                                        "DEF", "K", "BN"],
                    "draft_id": "D1"},
-        "rosters": [{"owner_id": "u123", "players": ["p1", "p2", "p3"]},
+        "rosters": [{"owner_id": "u123", "players": ["p1", "p2", "p3", "p5", "BUF"]},
                     {"owner_id": "u999", "players": ["p4"]}],
         "picks": [{"player_id": "p1"}, {"player_id": "p4"}],
     }
@@ -118,12 +125,14 @@ def test_import_league_builds_league_and_team():
     assert league.rules["te_reception_bonus"] == 0.5 and league.rules["pass_td"] == 6.0
     assert league.drafted == ["Josh Allen", "CeeDee Lamb"]
 
-    # Starting-lineup shape imported too (this one is superflex).
+    # Starting-lineup shape imported too (superflex, and a DEF + K starter).
     assert league.lineup["superflex"] == 1
-    assert league.lineup["starters"] == {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+    assert league.lineup["starters"] == {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
 
-    # Team: the caller's roster, same scoring, validates cleanly.
+    # Team: the caller's roster (incl. K and team defense), same scoring, validates.
     assert team.roster["QB"] == ["Josh Allen"]
     assert team.roster["WR"] == ["Ja'Marr Chase"]
+    assert team.roster["K"] == ["Justin Tucker"]
+    assert team.roster["DEF"] == ["BUF DST"]
     assert team.rules == league.rules
     team.validated()                                # roster normalizes, no raise

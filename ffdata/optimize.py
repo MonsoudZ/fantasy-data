@@ -47,17 +47,20 @@ import pandas as pd
 # A standard fantasy starting lineup. FLEX takes any RB/WR/TE; SUPERFLEX also
 # takes a QB (a 2-QB / superflex league, where QBs are far more valuable).
 DEFAULT_SLOTS = ("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX")
+# What most leagues actually start: the skill core plus a defense and a kicker.
+STANDARD_SLOTS = ("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "DEF", "K")
 _ELIGIBLE = {"QB": {"QB"}, "RB": {"RB"}, "WR": {"WR"}, "TE": {"TE"},
+             "K": {"K"}, "DEF": {"DEF"},
              "FLEX": {"RB", "WR", "TE"}, "SUPERFLEX": {"QB", "RB", "WR", "TE"}}
 
 
 def slots_from_lineup(lineup: dict | None) -> tuple:
     """Turn a league lineup config into a slot tuple for the optimizer.
 
-    `lineup` is {"starters": {QB/RB/WR/TE: n}, "flex": n, "superflex": n} -- the
-    same shape a Sleeper import produces. Falls back to DEFAULT_SLOTS when the
-    config is missing or empty, so a 1-QB league is unaffected and a superflex
-    league gets its SUPERFLEX slot (which lets a second QB start).
+    `lineup` is {"starters": {QB/RB/WR/TE/K/DEF: n}, "flex": n, "superflex": n} --
+    the same shape a Sleeper import produces. Falls back to DEFAULT_SLOTS when the
+    config is missing or empty, so a 1-QB league is unaffected; a superflex league
+    gets its SUPERFLEX slot, and a standard league its DEF and K slots.
     """
     if not lineup:
         return DEFAULT_SLOTS
@@ -67,6 +70,8 @@ def slots_from_lineup(lineup: dict | None) -> tuple:
         slots += [pos] * int(starters.get(pos, 0) or 0)
     slots += ["FLEX"] * int(lineup.get("flex", 0) or 0)
     slots += ["SUPERFLEX"] * int(lineup.get("superflex", 0) or 0)
+    slots += ["DEF"] * int(starters.get("DEF", 0) or 0)
+    slots += ["K"] * int(starters.get("K", 0) or 0)
     return tuple(slots) if slots else DEFAULT_SLOTS
 
 
