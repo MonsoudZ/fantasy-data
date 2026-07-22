@@ -576,17 +576,30 @@ if __name__ == "__main__":
     print(avail[["player", "position", "proj", "vor", "auction"]].to_string(index=False))
 
 
-# Roster codes that mean "not currently available", worst-first. `status` on the
-# target-season roster is the freshest health signal we have in the offseason --
-# it reflects TODAY, not last December.
+# Roster codes that mean "not currently available". `status` on the target-season
+# roster is the freshest availability signal we have in the offseason -- it
+# reflects TODAY, not last December.
+#
+# CAVEAT on the last four: nflverse populated SUS/RSN/NWT densely in 2019-2020
+# (187/177/228 players in 2019 alone) and has carried essentially ZERO since --
+# one SUS row in 2022, none in 2021 or 2023-2026. They're kept because they're
+# correct where the data exists (2019-20 backtests, and if upstream restores
+# them), but a suspension or holdout will NOT surface for a current draft. Don't
+# read an empty flag as "nobody is suspended".
 _INACTIVE_STATUS = {
     "RET": "retired",
+    "RSR": "retired",              # reserve/retired
     "RES": "on injured reserve",
     "PUP": "on PUP",
     "NFI": "non-football injury",
     "E14": "exempt",
+    "EXE": "on the exempt list",
     "CUT": "released",
-    "SUS": "suspended",
+    "UFA": "an unsigned free agent",
+    "RFA": "an unsigned restricted FA",
+    "SUS": "suspended",            # dormant since 2021 -- see caveat above
+    "RSN": "holding out (did not report)",
+    "NWT": "holding out (not with team)",
 }
 # Designations that actually cost a player the game. "Questionable" does not --
 # most Questionable players suit up, so treating it as a red flag would light up
@@ -597,7 +610,7 @@ _MISSED = ("Out", "Doubtful")
 _TRANSIENT = ("Illness",)
 
 
-def injury_context(target_season: int, con=None) -> pd.DataFrame:
+def availability_context(target_season: int, con=None) -> pd.DataFrame:
     """How last season ENDED for each player, plus how he sits right now.
 
     A season-total projection quietly assumes a full season. It can't tell you
@@ -661,9 +674,14 @@ def injury_context(target_season: int, con=None) -> pd.DataFrame:
                                  & ~out["last_injury"].isin(_TRANSIENT))
             out = out.drop(columns=["team"])
 
+    # `rosters` is WEEKLY (a player goes ACT -> DEV -> INA across a season), so
+    # take his LAST known row. any_value() here would pick an arbitrary week and
+    # report a status he's long since left.
     status = con.sql(
-        "select gsis_id as player_id, any_value(status) as status from rosters "
-        "where season = ? and gsis_id is not null group by gsis_id",
+        "select player_id, status from ("
+        "  select gsis_id as player_id, status, row_number() over ("
+        "    partition by gsis_id order by week desc) rn"
+        "  from rosters where season = ? and gsis_id is not null) where rn = 1",
         params=[target_season],
     ).df()
     status = status[status["status"].isin(_INACTIVE_STATUS)]
@@ -677,6 +695,83 @@ def injury_context(target_season: int, con=None) -> pd.DataFrame:
         out[c] = out[c].astype("Float64")
     out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
     return out.reset_index(drop=True)
+
+
+# The starting five. Both depth-chart formats label them the same way.
+_OL = ("LT", "LG", "C", "RG", "RT")
+# Two is where it starts to matter -- see line_context's docstring.
+_OL_THRESHOLD = 2
+
+
+def _ol_starters(con, season: int) -> pd.DataFrame:
+    """The five projected starting linemen per team.
+
+    Depth charts changed format: 2019-2024 are weekly rows keyed on
+    `depth_position`/`depth_team`/`club_code`, 2025+ are dated snapshots keyed on
+    `pos_abb`/`pos_rank`/`team`. Read whichever this season has.
+    """
+    ol = ", ".join(f"'{p}'" for p in _OL)
+    return con.sql(f"""
+        select distinct coalesce(team, club_code) as team, gsis_id
+        from depth_charts
+        where season = ? and gsis_id is not null and (
+            (depth_team = '1' and depth_position in ({ol}))
+         or (pos_rank = 1 and pos_abb in ({ol})))
+    """, params=[season]).df()
+
+
+def line_context(target_season: int, con=None) -> pd.DataFrame:
+    """Per team: starting offensive linemen who are compromised, and who they are.
+
+    Linemen never appear in `weekly` (ingest keeps skill positions only), but they
+    decide whether a backfield has anywhere to run. `injuries` and `depth_charts`
+    DO carry every position, so the unit is recoverable even though the box score
+    isn't.
+
+    MEASURED, 3,182 team-weeks 2019-2024, each team compared against its OWN
+    season average so team quality cancels out:
+
+        starting OL ruled Out |  0     1      2      3
+        team RB pts vs usual  | +0.03 +0.33  -3.72  -4.65
+
+    So it is a THRESHOLD, not a gradient -- losing one lineman costs nothing
+    measurable, losing two costs a backfield ~3.8 PPR points a game (t = -3.84,
+    95% CI [-5.8, -1.9]), and it replicates in both halves of the era (-3.3 in
+    2019-21, -4.4 in 2022-24). A plain correlation reads -0.03 and would have
+    thrown the whole thing away.
+
+    Two related things measured as nothing and are deliberately NOT here:
+      * OL continuity (how many starters return) -- r = -0.06 against RB point
+        change over 192 team-seasons, non-monotone, sign backwards.
+      * Opposing defenders out -- the gradient looks right (+3.5 pts at 2 out)
+        but it flips sign across halves of the era (-1.2 then +6.8), so it is
+        not a finding.
+
+    Preseason caveat: in July almost nobody is on IR, so this is mostly driven by
+    linemen who ended last season hurt. It earns its keep in-season.
+    """
+    con = con or connect()
+    try:
+        ol = _ol_starters(con, target_season)
+    except duckdb.CatalogException:
+        return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
+    if ol.empty:
+        return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
+
+    avail = availability_context(target_season, con).set_index("player_id")
+    hurt = ol["gsis_id"].map(avail["ended_hurt"]).fillna(False)
+    gone = ol["gsis_id"].map(avail["status"]).notna()
+    ol = ol[hurt.values | gone.values]
+    if ol.empty:
+        return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
+
+    names = con.sql(
+        "select distinct gsis_id, any_value(full_name) as nm from rosters "
+        "where season = ? group by gsis_id", params=[target_season]).df()
+    ol = ol.merge(names, on="gsis_id", how="left")
+    return (ol.groupby("team", as_index=False)
+              .agg(ol_out=("gsis_id", "size"),
+                   ol_names=("nm", lambda s: ", ".join(sorted(x for x in s if isinstance(x, str))))))
 
 
 def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
@@ -748,10 +843,20 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     out = out.merge(cc[["team", "new_coach"]], on="team", how="left")
     out["new_coach"] = out["new_coach"].fillna(False)
 
-    out = out.merge(injury_context(target_season, con), on="player_id", how="left")
+    out = out.merge(availability_context(target_season, con), on="player_id", how="left")
     out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
+
+    # The line only measured for the backfield (RBs lose ~3.8 pts/game once two
+    # starters are down; QBs showed nothing), so it rides only on RB rows rather
+    # than decorating everyone with a number that means nothing for them.
+    line = line_context(target_season, con)
+    out = out.merge(line, on="team", how="left")
+    is_rb = out["position"].eq("RB") if "position" in out.columns else False
+    out["ol_out"] = out["ol_out"].where(is_rb).fillna(0).astype(int)
+    out["ol_names"] = out["ol_names"].where(is_rb)
 
     cols = ["player_id", "team", "prior_team", "moved", "blocked_by", "blocked_by_fp",
             "vacated_fp", "depth_rank", "pass_rate", "new_coach",
-            "weeks_out", "last_injury", "last_week", "last_round", "ended_hurt", "status"]
+            "weeks_out", "last_injury", "last_week", "last_round", "ended_hurt", "status",
+            "ol_out", "ol_names"]
     return out[cols].drop_duplicates("player_id").reset_index(drop=True)

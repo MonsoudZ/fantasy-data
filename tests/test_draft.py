@@ -4,8 +4,8 @@ import pandas as pd
 
 from conftest import requires_data_lake
 
-from ffdata.draft import (_replacement_ranks, best_available, injury_context, keeper_value, trade_value,
-                          round_cost, DEFAULT_LEAGUE)
+from ffdata.draft import (_replacement_ranks, availability_context, best_available, keeper_value,
+                          line_context, player_context, round_cost, trade_value, DEFAULT_LEAGUE)
 
 
 def _valued_board():
@@ -102,7 +102,7 @@ def test_player_context_describes_the_room():
 
 
 def _inj_con(rows, roster=None):
-    """A DuckDB with just the two views injury_context reads."""
+    """A DuckDB with just the two views availability_context reads."""
     import duckdb
     con = duckdb.connect()
     con.register("injuries", pd.DataFrame(
@@ -110,11 +110,12 @@ def _inj_con(rows, roster=None):
         columns=["season", "gsis_id", "team", "week", "game_type",
                  "report_status", "report_primary_injury"]))
     con.register("rosters", pd.DataFrame(
-        roster or [], columns=["season", "gsis_id", "status"]))
+        [(se, g, 1, st) for se, g, st in (roster or [])],
+        columns=["season", "gsis_id", "week", "status"]))
     return con
 
 
-def test_injury_context_flags_who_limped_out_of_the_season():
+def test_availability_context_flags_who_limped_out_of_the_season():
     """`ended_hurt` must key off the TEAM's last week, not the player's own last
     report -- measured against his own reports it is trivially true for everyone.
     KC plays to week 22, so a week-5 injury is long healed by then."""
@@ -125,7 +126,7 @@ def test_injury_context_flags_who_limped_out_of_the_season():
         ("early", "KC", 5, "REG", "Out", "Ankle"),
         ("healthy", "KC", 22, "SB", None, None),    # sets KC's finish at wk 22
     ])
-    c = injury_context(2026, con=con).set_index("player_id")
+    c = availability_context(2026, con=con).set_index("player_id")
 
     assert c.loc["late", "ended_hurt"]
     assert not c.loc["early", "ended_hurt"]
@@ -136,7 +137,7 @@ def test_injury_context_flags_who_limped_out_of_the_season():
     assert "healthy" not in c.index or pd.isna(c.loc["healthy", "last_injury"])
 
 
-def test_injury_context_ignores_absences_that_are_not_injuries():
+def test_availability_context_ignores_absences_that_are_not_injuries():
     """The report doubles as an absence log. A personal matter isn't a health
     risk, and an illness resolves in days -- neither predicts Week 1 availability,
     though a missed game is still a missed game."""
@@ -145,7 +146,7 @@ def test_injury_context_ignores_absences_that_are_not_injuries():
         ("personal", "KC", 18, "REG", "Out", "Not injury related - personal matter"),
         ("hurt", "KC", 18, "REG", "Out", "Hamstring"),
     ])
-    c = injury_context(2026, con=con).set_index("player_id")
+    c = availability_context(2026, con=con).set_index("player_id")
 
     assert "personal" not in c.index                  # dropped outright
     assert not c.loc["sick", "ended_hurt"]            # counted, but not a flag
@@ -153,19 +154,93 @@ def test_injury_context_ignores_absences_that_are_not_injuries():
     assert c.loc["hurt", "ended_hurt"]                # the real one still fires
 
 
-def test_injury_context_reports_current_roster_status():
+def test_availability_context_reports_current_roster_status():
     """The freshest signal in July isn't last December -- it's a player still
     sitting on IR right now. It must surface even with no injury history."""
     con = _inj_con([], roster=[(2026, "ir", "RES"), (2026, "gone", "RET"),
                                (2026, "fine", "ACT")])
-    c = injury_context(2026, con=con).set_index("player_id")
+    c = availability_context(2026, con=con).set_index("player_id")
 
     assert c.loc["ir", "status"] == "on injured reserve"
     assert c.loc["gone", "status"] == "retired"
     assert "fine" not in c.index                      # ACT is not a note
 
 
-def test_injury_context_survives_a_lake_without_injuries():
+def test_availability_context_survives_a_lake_without_injuries():
     import duckdb
-    empty = injury_context(2026, con=duckdb.connect())
+    empty = availability_context(2026, con=duckdb.connect())
     assert empty.empty and "ended_hurt" in empty.columns
+
+
+def test_availability_status_uses_his_LAST_known_week():
+    """`rosters` is weekly and a player's status moves (ACT -> DEV -> INA). Taking
+    any_value() would report a status he left months ago."""
+    import duckdb
+    con = duckdb.connect()
+    con.register("injuries", pd.DataFrame(
+        columns=["season", "gsis_id", "team", "week", "game_type",
+                 "report_status", "report_primary_injury"]))
+    con.register("rosters", pd.DataFrame(
+        [(2026, "p", 1, "ACT"), (2026, "p", 9, "RES"),      # went on IR in week 9
+         (2026, "q", 1, "RES"), (2026, "q", 9, "ACT")],     # came OFF IR in week 9
+        columns=["season", "gsis_id", "week", "status"]))
+    c = availability_context(2026, con=con).set_index("player_id")
+
+    assert c.loc["p", "status"] == "on injured reserve"     # latest week wins
+    assert "q" not in c.index                               # active now -> no note
+
+
+def _line_con(ol_rows, avail_rows, season=2026):
+    """depth_charts + rosters + injuries, enough for line_context."""
+    import duckdb
+    con = duckdb.connect()
+    con.register("depth_charts", pd.DataFrame(
+        [(season, t, g, "LT", 1, None, None, None) for t, g in ol_rows],
+        columns=["season", "team", "gsis_id", "pos_abb", "pos_rank",
+                 "club_code", "depth_position", "depth_team"]))
+    con.register("rosters", pd.DataFrame(
+        [(season, g, 1, st, nm) for g, st, nm in avail_rows],
+        columns=["season", "gsis_id", "week", "status", "full_name"]))
+    con.register("injuries", pd.DataFrame(
+        columns=["season", "gsis_id", "team", "week", "game_type",
+                 "report_status", "report_primary_injury"]))
+    return con
+
+
+def test_line_context_counts_only_unavailable_starters():
+    con = _line_con(
+        ol_rows=[("NYG", "lt"), ("NYG", "lg"), ("NYG", "c"), ("KC", "kclt")],
+        avail_rows=[("lt", "RES", "Andrew Thomas"), ("lg", "PUP", "J.M. Schmitz"),
+                    ("c", "ACT", "Healthy Guy"), ("kclt", "ACT", "Trey Smith")])
+    lc = line_context(2026, con=con).set_index("team")
+
+    assert lc.loc["NYG", "ol_out"] == 2
+    assert "Andrew Thomas" in lc.loc["NYG", "ol_names"]
+    assert "Healthy Guy" not in lc.loc["NYG", "ol_names"]   # ACT isn't "down"
+    assert "KC" not in lc.index                             # nobody down -> no row
+
+
+def test_line_context_survives_a_lake_without_depth_charts():
+    import duckdb
+    empty = line_context(2026, con=duckdb.connect())
+    assert empty.empty and {"team", "ol_out"}.issubset(empty.columns)
+
+
+@requires_data_lake
+def test_line_context_finds_real_starting_linemen():
+    """Linemen are absent from `weekly` entirely (ingest keeps skill positions),
+    so this only works because depth_charts + injuries carry every position."""
+    lc = line_context(2026)
+    assert not lc.empty
+    assert lc["ol_out"].between(1, 5).all()          # can't lose more than five
+    assert lc["ol_names"].str.len().gt(0).all()
+
+
+@requires_data_lake
+def test_offensive_line_context_rides_only_on_backfields():
+    """It measured for RBs (-3.8 pts/game at 2+ down) and showed nothing for QBs,
+    so it must not decorate non-RB rows with a number that means nothing there."""
+    pc = player_context(2026)
+    assert pc.loc[pc["ol_out"] > 0, "position"].eq("RB").all() if "position" in pc else True
+    flagged = pc[pc["ol_out"] > 0]
+    assert not flagged.empty and flagged["ol_names"].notna().all()

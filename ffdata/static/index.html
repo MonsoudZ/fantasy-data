@@ -551,18 +551,31 @@ function renderBoard(){
   // Injury flag + the text behind it. A season projection silently assumes 17
   // games; this is the asterisk on that assumption.
   const injBadge = p => {
-    const j = p.ctx && p.ctx.inj; if(!j) return "";
-    const sev = j.status || j.ended_hurt;      // unavailable now, or limped out
+    const j = p.ctx && p.ctx.inj, ln = p.ctx && p.ctx.line;
+    if(!j && !ln) return "";
     const L = [];
-    if(j.status) L.push(`Currently <b>${j.status}</b>`);
-    if(j.injury){
-      const rd = j.round && j.round!=="REG" ? ` (${j.round})` : "";
-      L.push(`Last ruled out wk ${j.week}${rd} — <b>${j.injury}</b>`);
+    if(j){
+      if(j.status) L.push(`Currently <b>${j.status}</b>`);
+      if(j.injury){
+        const rd = j.round && j.round!=="REG" ? ` (${j.round})` : "";
+        L.push(`Last ruled out wk ${j.week}${rd} — <b>${j.injury}</b>`);
+      }
+      if(j.weeks_out) L.push(`Missed <b>${j.weeks_out}</b> game${j.weeks_out>1?"s":""} in ${CFG.season-1}`);
+      if(j.ended_hurt) L.push(`Ended the season hurt — rehab runs into the offseason, so a Week 1 return isn't a given.`);
     }
-    if(j.weeks_out) L.push(`Missed <b>${j.weeks_out}</b> game${j.weeks_out>1?"s":""} in ${CFG.season-1}`);
-    if(j.ended_hurt) L.push(`Ended the season hurt — rehab runs into the offseason, so a Week 1 return isn't a given.`);
+    // Linemen never show up in a box score but decide whether there's a hole to
+    // run through. Two down is where it measured (-3.8 pts/game); one is noise,
+    // so it's reported without alarm.
+    if(ln){
+      if(L.length) L.push("");
+      L.push(`<b>${ln.out}</b> starting O-line${ln.out>1?"men":"man"} down: ${ln.who}`);
+      L.push(ln.out>=2
+        ? `Two or more out cost a backfield ~<b>3.8 pts/game</b> in 2019-24.`
+        : `One out measured as no effect — noted, not a downgrade.`);
+    }
     if(!L.length) return "";
-    const body = `<div class="t-hd">Injury</div><div class="t-sub">${L.join("<br>")}</div>`;
+    const sev = (j && (j.status || j.ended_hurt)) || (ln && ln.out>=2);
+    const body = `<div class="t-hd">Availability</div><div class="t-sub">${L.join("<br>")}</div>`;
     return `<span class="inj-badge${sev?" sev":""}" data-tip="${body.replace(/"/g,"&quot;")}">i</span>`;
   };
   const ctxRow = p => {

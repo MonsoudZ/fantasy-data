@@ -374,6 +374,12 @@ def _player_ctx(season: int) -> dict:
         }
         if inj["injury"] or inj["status"]:
             out[r["player_id"]]["inj"] = inj
+        # Only on RBs, and only when someone's actually down -- see line_context.
+        if int(r["ol_out"] or 0):
+            out[r["player_id"]]["line"] = {
+                "out": int(r["ol_out"]),
+                "who": (None if pd.isna(r["ol_names"]) else str(r["ol_names"])),
+            }
     return out
 
 

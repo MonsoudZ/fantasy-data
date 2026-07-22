@@ -138,7 +138,7 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   because it's all one join: DJ Moore CHI→BUF shows up as Rome Odunze's 262
   vacated AND as the man now blocking Khalil Shakir. Also context only, never a
   model input.
-- **Health is the asterisk on every season projection** (`draft.injury_context`,
+- **Health is the asterisk on every season projection** (`draft.availability_context`,
   the hover "i" on each board row). A season total silently assumes 17 games; the
   flag says when that's a stretch — `weeks_out`, the body part and round of his
   last Out/Doubtful report, `ended_hurt`, and current roster `status`. Three
@@ -157,6 +157,43 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   `injuries` covering linemen and defense that `weekly` never kept. Context only,
   like the rest — the injury report is a coach's strategic document as much as a
   medical one, so as a feature it would mostly fit team reporting habits.
+  `rosters` is **weekly** (a player goes ACT→DEV→INA within a season), so status
+  must come from his LAST known week — `any_value()` reports a status he left.
+- **Suspensions and holdouts are not in this data.** `rosters.status` has the
+  right codes (`SUS`, `RSN` = did not report, `NWT` = not with team) and nflverse
+  populated them densely in 2019–20 (187/228/177 players in 2019) — then stopped:
+  **one** SUS row in 2022, zero in 2021 and 2023–26. They're mapped in
+  `_INACTIVE_STATUS` because they're correct where data exists, but a suspension
+  or holdout will **not** surface for a current draft. Don't read an empty flag as
+  "nobody is suspended", and don't build a feature on it. No other ingested source
+  carries transactions.
+- **The offensive line matters, but only past a threshold** (`draft.line_context`).
+  Linemen never appear in `weekly` (ingest keeps skill positions), but
+  `depth_charts` + `injuries` carry every position, so the unit is recoverable.
+  Measured over 3,182 team-weeks 2019–24, each team compared to its **own** season
+  average so team quality cancels:
+
+  | starting OL ruled Out | 0 | 1 | 2 | 3 |
+  |---|---|---|---|---|
+  | team RB pts vs usual | +0.03 | +0.33 | **−3.72** | −4.65 |
+
+  One lineman down is *nothing*; two costs a backfield ~3.8 PPR pts/game
+  (t = −3.84, 95% CI [−5.8, −1.9]), and it replicates in both halves of the era
+  (−3.3 in 2019–21, −4.4 in 2022–24). A plain correlation reads **−0.03** and
+  would have thrown it away — the relationship is a threshold, not a gradient.
+  Rides on **RB rows only**: QBs showed nothing (−0.40 at two down). Preseason
+  caveat: in July it's driven by linemen who ended last season hurt (2026: 11
+  teams have one, only NYG has two), so it earns its keep in-season.
+- **Two unit-level things measured as nothing and are deliberately not shipped:**
+  - *OL continuity* (how many of the five starters return): r = **−0.06** vs RB
+    point change over 192 team-seasons, non-monotone, and the sign is backwards —
+    it's regression to the mean, not blocking.
+  - *Opposing defenders out*: the gradient looks right (−0.48 → +0.91 → +3.46 as
+    2 starters sit) and 2+ gives +3.77 pts (t = 2.10), but it **flips sign across
+    halves of the era** (−1.2 in 2019–21, +6.8 in 2022–24). Not a finding.
+  Depth charts changed format mid-stream: 2019–24 are weekly rows on
+  `depth_position`/`depth_team`/`club_code`, 2025+ are dated snapshots on
+  `pos_abb`/`pos_rank`/`team`. Any multi-season depth query must read both.
 - `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
   rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
   teams silently lose all team context.
