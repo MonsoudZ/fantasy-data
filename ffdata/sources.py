@@ -48,6 +48,14 @@ SOURCES = {
         "url": f"{NFLDATA}/games.csv",
         "seasonal": False,
     },
+    # NFL draft results (round, overall pick, team, player ids, position) for
+    # every draft. One all-seasons file. Powers the rookie draft-capital model
+    # (draft.py): rookies have no prior NFL season, so their projection keys off
+    # where they were drafted.
+    "draft_picks": {
+        "url": f"{NFLVERSE}/draft_picks/draft_picks.parquet",
+        "seasonal": False,
+    },
     # Next Gen Stats: player-tracking metrics not derivable from the box score
     # (separation, cushion, air-yards share, CPOE, rush yards over expected).
     # One all-seasons file per stat type; week 0 rows are season aggregates.

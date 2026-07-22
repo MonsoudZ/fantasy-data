@@ -129,8 +129,11 @@ time), then computes VOR (value over replacement) for snake ranking and auction
 dollar values. Honest note: the season model alone doesn't beat naive "last
 year's points" on ranking, so the projection is a **blend** (0.4 model + 0.6
 prior year) — which beats both and keeps the board sane (proven studs on top,
-not last year's flukes). Rookies are skipped (no prior season). Keepers, trades,
-and dynasty are the same value engine applied differently.
+not last year's flukes). **Rookies** (no prior season) get a separate
+draft-capital model — projected from where they were drafted (`draft_picks`
+source) and folded into the board. It's scaffolded but not yet backtested on real
+data; run `draft.backtest_rookies()` to validate, or pass `--no-rookies` to skip
+it. Keepers, trades, and dynasty are the same value engine applied differently.
 
 ### Keepers, trades, dynasty
 

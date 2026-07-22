@@ -194,6 +194,107 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
 
 
+# --------------------------------------------------------------------------- #
+# Rookies: draft-capital model (returning-player model can't touch them --
+# they have no prior season). SCAFFOLDED but not yet backtested on real data;
+# validate with backtest_rookies() before trusting the magnitudes.
+# --------------------------------------------------------------------------- #
+_ROOKIE_FEATS = ["pick", "log_pick", "draft_round"] + [f"is_{p}" for p in POSITIONS]
+_ROOKIE_PARAMS = dict(n_estimators=300, learning_rate=0.03, num_leaves=16,
+                      min_child_samples=15, subsample=0.9, colsample_bytree=0.9,
+                      random_state=0, verbose=-1, n_jobs=4)
+
+
+def _has_view(con, name: str) -> bool:
+    return name in {r[0] for r in con.sql("show tables").fetchall()}
+
+
+def _draft_capital(con) -> pd.DataFrame | None:
+    """Per-player draft capital: season drafted, round, overall pick, position.
+
+    Returns None if the `draft_picks` source hasn't been ingested, so callers can
+    degrade gracefully (rookies simply won't appear on the board).
+    """
+    if not _has_view(con, "draft_picks"):
+        return None
+    df = con.sql("select * from draft_picks").df()
+    if df.empty or "gsis_id" not in df.columns or "season" not in df.columns:
+        return None
+    # nflverse has renamed the name column across versions; take what's present.
+    name_col = next((c for c in ("pfr_player_name", "full_name", "player_name", "player")
+                     if c in df.columns), None)
+    out = pd.DataFrame({
+        "player_id": df["gsis_id"],
+        "draft_season": pd.to_numeric(df["season"], errors="coerce"),
+        "draft_round": pd.to_numeric(df.get("round"), errors="coerce"),
+        "pick": pd.to_numeric(df.get("pick"), errors="coerce"),
+        "position": df.get("position"),
+        "player": df[name_col] if name_col else df["gsis_id"],
+    }).dropna(subset=["player_id", "draft_season", "pick"])
+    return out[out["position"].isin(POSITIONS)].reset_index(drop=True)
+
+
+def _rookie_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["pick"] = df["pick"].astype(float)
+    df["log_pick"] = np.log(df["pick"].clip(lower=1))
+    # Fall back to a pick-derived round if the source didn't carry one.
+    df["draft_round"] = df["draft_round"].fillna(df["pick"] // 32 + 1).astype(float)
+    for p in POSITIONS:
+        df[f"is_{p}"] = (df["position"] == p).astype(int)
+    return df
+
+
+def rookie_projection(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame | None:
+    """Project incoming rookies' rookie-season points from draft capital.
+
+    Trains draft-capital -> rookie-season points on all rookies drafted BEFORE
+    `target_season` (leak-free: draft position is preseason-known), then predicts
+    the players drafted INTO `target_season`. Returns None if the `draft_picks`
+    source isn't ingested; an empty frame if there are no rookies to project.
+
+    NOTE: scaffolded, not yet validated on real data -- run backtest_rookies().
+    """
+    con = con or connect()
+    caps = _draft_capital(con)
+    if caps is None:
+        return None
+    empty = pd.DataFrame(columns=["player_id", "player", "position", "proj"])
+    fp = _season_agg(con, rules)[["player_id", "season", "fp"]]
+    # A rookie's rookie-season points = production in the season they were drafted.
+    train = caps.merge(fp, left_on=["player_id", "draft_season"],
+                       right_on=["player_id", "season"], how="inner")
+    train = _rookie_features(train[train["draft_season"] < target_season])
+    test = _rookie_features(caps[caps["draft_season"] == target_season].copy())
+    if train.empty or test.empty:
+        return empty
+    model = lgb.LGBMRegressor(**_ROOKIE_PARAMS).fit(train[_ROOKIE_FEATS], train["fp"])
+    test["proj"] = np.clip(model.predict(test[_ROOKIE_FEATS]), 0, None).round(1)
+    return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
+
+
+def backtest_rookies(target_season: int, rules: ScoringRules = PPR, con=None) -> dict | None:
+    """Rank quality of rookie projections vs their actual rookie-season finish.
+
+    Returns None if `draft_picks` isn't ingested. This is the measurement the
+    rookie model still needs -- run it on a real lake before trusting the board's
+    rookie values.
+    """
+    from scipy.stats import spearmanr
+    con = con or connect()
+    proj = rookie_projection(target_season, rules=rules, con=con)
+    if proj is None:
+        return None
+    actual = _season_agg(con, rules)
+    actual = actual[actual["season"] == target_season][["player_id", "fp"]]
+    m = proj.merge(actual, on="player_id", how="inner")
+    if len(m) < 3:
+        return {"season": target_season, "n": len(m), "note": "too few rookies with data"}
+    return {"season": target_season, "n": len(m),
+            "rookie_spearman": round(float(spearmanr(m["proj"], m["fp"]).correlation), 3),
+            "rookie_mae": round(float((m["proj"] - m["fp"]).abs().mean()), 1)}
+
+
 def _replacement_ranks(league: dict) -> dict:
     """The rank at each position below which a player is 'replacement level'."""
     t, s = league["teams"], league["starters"]
@@ -208,14 +309,23 @@ def _replacement_ranks(league: dict) -> dict:
 
 
 def draft_board(target_season: int, league: dict | None = None,
-                rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+                rules: ScoringRules = PPR, include_rookies: bool = True,
+                con=None) -> pd.DataFrame:
     """Ranked draft board: season projection, VOR, and auction dollar value.
 
     `rules` sets the league scoring (default PPR); VOR and auction $ follow from
     the scored projections, so the whole board reflects the chosen scoring.
+    `include_rookies` folds in the draft-capital rookie model when the
+    `draft_picks` source is available (silently veterans-only if it isn't).
     """
     league = league or DEFAULT_LEAGUE
+    con = con or connect()
     proj = project_season(target_season, rules=rules, con=con)
+    if include_rookies:
+        rookies = rookie_projection(target_season, rules=rules, con=con)
+        if rookies is not None and not rookies.empty:
+            proj = (pd.concat([proj, rookies], ignore_index=True)
+                    .drop_duplicates(subset="player_id", keep="first"))
     if proj.empty:
         return proj
     repl_rank = _replacement_ranks(league)
@@ -318,9 +428,11 @@ if __name__ == "__main__":
     p.add_argument("--scoring", choices=list(_RULES), default="ppr")
     p.add_argument("--position", choices=list(POSITIONS))
     p.add_argument("--drafted", default="", help="comma-separated already-drafted players")
+    p.add_argument("--no-rookies", action="store_true",
+                   help="exclude the draft-capital rookie model (needs the draft_picks source)")
     p.add_argument("--n", type=int, default=20)
     args = p.parse_args()
-    board = draft_board(args.season, rules=_RULES[args.scoring])
+    board = draft_board(args.season, rules=_RULES[args.scoring], include_rookies=not args.no_rookies)
     if board.empty:
         raise SystemExit(f"No draftable data for {args.season}.")
     avail = best_available(board, args.drafted.split(",") if args.drafted else [], args.position, args.n)

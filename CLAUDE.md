@@ -80,4 +80,8 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - Draft/dynasty values **honor any `ScoringRules`** (scored from raw stats via
   `scoring.score()`, same as the weekly path); default PPR. CLIs take
   `--scoring ppr|half|standard`; the API takes a `rules=` / `scoring` arg.
-- Rookies are skipped by the draft model (no prior season → needs a draft-capital model).
+- Rookies: a **draft-capital model** (`draft.rookie_projection`, needs the
+  `draft_picks` source) projects rookie-season points from where a player was
+  drafted and folds them into `draft_board` (`include_rookies=True`). ⚠️ Scaffolded
+  but **not yet backtested on real data** — run `draft.backtest_rookies()` before
+  trusting the magnitudes. Degrades to veterans-only if `draft_picks` isn't ingested.
