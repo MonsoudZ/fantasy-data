@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from . import advice
 from .draft import (DEFAULT_LEAGUE, best_available, draft_board, keeper_value,
-                    rookie_context, trade_value)
+                    player_context, rookie_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -322,17 +322,47 @@ def api_draft(req: DraftRequest):
     if err:
         return err
     avail = best_available(board, req.drafted, req.position or None, req.n)
-    ctx = _rookie_ctx(req.season)
+    rk, ctx = _rookie_ctx(req.season), _player_ctx(req.season)
     players = []
     for _, r in avail.iterrows():
         row = {"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
                "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
-        # Rookies carry situation context -- the projection only knows draft
-        # capital, so the room they land in is the drafter's call to weigh.
-        if r["player"] in ctx:
-            row["rookie"] = ctx[r["player"]]
+        # Every player carries the situation the projection can't see -- who's
+        # ahead of him, what left the room, the scheme. Rookies additionally
+        # carry draft capital, which is all their projection is built on.
+        sit = ctx.get(r.get("player_id"))
+        if sit:
+            row["ctx"] = sit
+        if r["player"] in rk:
+            row["rookie"] = rk[r["player"]]
         players.append(row)
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
+
+
+@lru_cache(maxsize=8)
+def _player_ctx(season: int) -> dict:
+    """player_id -> situation context (room, scheme, move) for every player."""
+    try:
+        c = player_context(season)
+    except Exception:  # noqa: BLE001 - context is a bonus, never fatal
+        _log.exception("player context failed (%s)", season)
+        return {}
+    if c is None or c.empty:
+        return {}
+    out = {}
+    for _, r in c.iterrows():
+        out[r["player_id"]] = {
+            "team": r["team"],
+            "from": (None if pd.isna(r["prior_team"]) else str(r["prior_team"])),
+            "moved": bool(r["moved"]),
+            "blocked_by": (None if pd.isna(r["blocked_by"]) else str(r["blocked_by"])),
+            "blocked_by_fp": float(r["blocked_by_fp"]),
+            "vacated": float(r["vacated_fp"]),
+            "depth": (None if pd.isna(r["depth_rank"]) else int(r["depth_rank"])),
+            "pass_rate": (None if pd.isna(r["pass_rate"]) else float(r["pass_rate"])),
+            "new_coach": bool(r["new_coach"]),
+        }
+    return out
 
 
 @lru_cache(maxsize=8)

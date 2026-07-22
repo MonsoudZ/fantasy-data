@@ -531,20 +531,33 @@ function renderBoard(){
   // capital is all the model knows, so show who's ahead and whether the offense
   // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
   // rookie buried behind a star on a run-first team, at the same draft pick.
-  const rkRow = p => {
-    const r = p.rookie; if(!r) return "";
-    const blocked = r.blocked_by
-      ? `behind <b>${r.blocked_by}</b> (${r.blocked_by_fp.toFixed(0)} pts)` : "clear depth chart";
-    const depth = r.depth!=null ? `<span class="${r.depth===1?'rk-good':'rk-bad'}">DC${r.depth}</span>` : "";
-    const pass = r.pass_rate!=null
-      ? `<span class="${r.pass_rate>=0.58?'rk-good':(r.pass_rate<=0.53?'rk-bad':'')}">${(r.pass_rate*100).toFixed(0)}% pass</span>` : "";
-    return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">
-      <span>${r.team} · pick ${r.pick}</span><span>${blocked}</span>
-      <span><b>${r.vacated.toFixed(0)}</b> pts vacated</span>${depth?`<span>${depth}</span>`:""}${pass?`<span>${pass}</span>`:""}
-    </div></td></tr>`;
+  // Every player gets a situation line: the room, the scheme, the move. The
+  // projection only sees his own past numbers, so this is where a drafter learns
+  // that a big "vacated" figure sits behind an entrenched starter, or that a
+  // move landed him on a run-first offense.
+  const ctxRow = p => {
+    const c = p.ctx, r = p.rookie;
+    if(!c && !r) return "";
+    const bits = [];
+    if(r) bits.push(`<span>pick ${r.pick}</span>`);
+    if(c){
+      if(c.moved && c.from && c.from!==c.team) bits.push(`<span class="rk-bad">${c.from} → ${c.team}</span>`);
+      else bits.push(`<span>${c.team}</span>`);
+      bits.push(c.blocked_by
+        ? `<span>behind <b>${c.blocked_by}</b> (${c.blocked_by_fp.toFixed(0)})</span>`
+        : `<span class="rk-good">leads room</span>`);
+      if(c.vacated) bits.push(`<span><b>${c.vacated.toFixed(0)}</b> vacated</span>`);
+      if(c.depth!=null) bits.push(`<span class="${c.depth===1?'rk-good':'rk-bad'}">DC${c.depth}</span>`);
+      if(c.pass_rate!=null) bits.push(`<span class="${c.pass_rate>=0.58?'rk-good':(c.pass_rate<=0.53?'rk-bad':'')}">${(c.pass_rate*100).toFixed(0)}% pass</span>`);
+      if(c.new_coach) bits.push(`<span class="rk-bad">new HC</span>`);
+    } else if(r){
+      bits.push(`<span>${r.team}</span>`);
+      if(r.blocked_by) bits.push(`<span>behind <b>${r.blocked_by}</b></span>`);
+    }
+    return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+rkRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";

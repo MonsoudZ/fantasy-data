@@ -131,6 +131,13 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   Lemon (pick 20) has 273 vacated but sits behind DeVonta Smith at DC2 on a 51%-
   pass offense, while Carnell Tate (pick 4) has only 83 vacated yet is already
   DC1 on a 60%-pass team. The raw number says Lemon; the situation says Tate.
+- **Veterans get the same treatment** (`draft.player_context`): every board row
+  shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
+  player at his position, by last year's points; empty = leads the room),
+  `vacated_fp`, `depth_rank`, `pass_rate`, `new_coach`. It reads coherently
+  because it's all one join: DJ Moore CHI→BUF shows up as Rome Odunze's 262
+  vacated AND as the man now blocking Khalil Shakir. Also context only, never a
+  model input.
 - `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
   rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
   teams silently lose all team context.

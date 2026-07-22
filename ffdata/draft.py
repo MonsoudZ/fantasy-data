@@ -573,3 +573,77 @@ if __name__ == "__main__":
     print(f"\nDraft board {args.season} ({args.scoring.upper()}; "
           f"VOR = value over replacement, $ = auction value):\n")
     print(avail[["player", "position", "proj", "vor", "auction"]].to_string(index=False))
+
+
+def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+    """Situation context for every projectable player -- the room he's in.
+
+    The season model sees a player's own prior stats plus a few team flags; it
+    can't show you WHY a number might be wrong. This does, for veterans and
+    rookies alike:
+
+      * moved      -- changed teams since last season (new offense, new role)
+      * blocked_by -- the best OTHER player at his position on his team, by last
+                      season's points. Empty means he leads the room.
+      * vacated_fp -- production at his position that left the team (opportunity)
+      * depth_rank -- preseason depth-chart spot (1 = starter)
+      * pass_rate  -- team's pass share of plays; scheme caps the whole room
+      * new_coach  -- the team changed head coach
+
+    Context only. These are shown next to the projection, never folded into it
+    (measured worse than the model alone -- see rookie_context's note).
+    """
+    con = con or connect()
+    prior = target_season - 1
+    agg, ts = _season_agg(con, rules), _team_season(con)
+
+    last = agg[agg["season"] == prior][["player_id", "player", "position", "fp"]]
+    then = ts[ts["season"] == prior][["player_id", "team"]].rename(columns={"team": "prior_team"})
+    now = ts[ts["season"] == target_season][["player_id", "team"]]
+    if now.empty:                     # target-season rosters not ingested yet
+        return pd.DataFrame(columns=["player_id", "team", "moved", "blocked_by",
+                                     "blocked_by_fp", "vacated_fp", "depth_rank",
+                                     "pass_rate", "new_coach"])
+
+    # Who is in each room now, ranked by what they did last season.
+    room = now.merge(last[["player_id", "player", "position", "fp"]], on="player_id", how="left")
+    room["fp"] = room["fp"].fillna(0.0)
+    room = room.dropna(subset=["position"])
+    best = room.sort_values("fp", ascending=False).groupby(["team", "position"])
+    top1 = best.head(1)[["team", "position", "player", "fp"]].rename(
+        columns={"player": "top_player", "fp": "top_fp"})
+    top2 = (best.head(2).groupby(["team", "position"]).tail(1)[["team", "position", "player", "fp"]]
+            .rename(columns={"player": "second_player", "fp": "second_fp"}))
+    room = room.merge(top1, on=["team", "position"], how="left").merge(
+        top2, on=["team", "position"], how="left")
+    # A player isn't blocked by himself: if he IS the top of the room, the man
+    # behind him is irrelevant -- report nobody.
+    is_top = room["player"].fillna("") == room["top_player"].fillna("")
+    room["blocked_by"] = np.where(is_top, None, room["top_player"])
+    room["blocked_by_fp"] = np.where(is_top, 0.0, room["top_fp"]).round(1)
+
+    # Production that left each room since last season.
+    p2 = last.merge(then, on="player_id", how="left").merge(
+        now.rename(columns={"team": "team_now"}), on="player_id", how="left")
+    gone = p2[p2["prior_team"] != p2["team_now"]]
+    vac = (gone.groupby(["prior_team", "position"], as_index=False)["fp"].sum()
+           .rename(columns={"prior_team": "team", "fp": "vacated_fp"}))
+    out = room.merge(vac, on=["team", "position"], how="left")
+    out["vacated_fp"] = out["vacated_fp"].fillna(0.0).round(1)
+
+    out = out.merge(then, on="player_id", how="left")
+    out["moved"] = (out["prior_team"].notna() & (out["prior_team"] != out["team"]))
+    out["depth_rank"] = out["player_id"].map(_depth_rank(con, target_season))
+    out = out.merge(_team_pass_rate(con, prior), on="team", how="left")
+
+    coach = _team_coach(con)
+    cur_c = coach[coach["season"] == target_season][["team", "coach"]]
+    old_c = coach[coach["season"] == prior][["team", "coach"]].rename(columns={"coach": "coach_prev"})
+    cc = cur_c.merge(old_c, on="team", how="left")
+    cc["new_coach"] = cc["coach"].ne(cc["coach_prev"]) & cc["coach_prev"].notna()
+    out = out.merge(cc[["team", "new_coach"]], on="team", how="left")
+    out["new_coach"] = out["new_coach"].fillna(False)
+
+    cols = ["player_id", "team", "prior_team", "moved", "blocked_by", "blocked_by_fp",
+            "vacated_fp", "depth_rank", "pass_rate", "new_coach"]
+    return out[cols].drop_duplicates("player_id").reset_index(drop=True)

@@ -2,6 +2,8 @@
 
 import pandas as pd
 
+from conftest import requires_data_lake
+
 from ffdata.draft import (_replacement_ranks, best_available, keeper_value, trade_value,
                           round_cost, DEFAULT_LEAGUE)
 
@@ -77,3 +79,23 @@ def test_best_available_matches_names_loosely():
     board = _board().assign(player=["A.J. Brown", "B", "C", "D", "E"])
     out = best_available(board, drafted=["aj brown"])
     assert "A.J. Brown" not in set(out["player"])
+
+
+@requires_data_lake
+def test_player_context_describes_the_room():
+    """Situation context for veterans: who's ahead, what left, scheme, moves."""
+    from ffdata.draft import draft_board, player_context
+    c = player_context(2026)
+    assert {"player_id", "team", "prior_team", "moved", "blocked_by", "blocked_by_fp",
+            "vacated_fp", "depth_rank", "pass_rate", "new_coach"}.issubset(c.columns)
+    assert len(c) > 200
+    # Nobody blocks himself, and a blocker must out-produce nobody-is-listed rows.
+    board = draft_board(2026).merge(c, on="player_id", how="inner")
+    assert (board["player"] != board["blocked_by"].fillna("")).all()
+    # The best player at a position on a team leads his room (no blocker).
+    top = board.sort_values("proj", ascending=False).groupby(["team", "position"]).head(1)
+    assert top["blocked_by"].isna().mean() > 0.8
+    # `moved` must agree with the team fields it's derived from.
+    moved = board[board["moved"]]
+    assert (moved["team"] != moved["prior_team"]).all()
+    assert board["pass_rate"].dropna().between(0.3, 0.8).all()
