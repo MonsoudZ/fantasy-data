@@ -3,7 +3,7 @@
 import pandas as pd
 
 from ffdata.draft import (_replacement_ranks, best_available, keeper_value, trade_value,
-                          round_cost, DEFAULT_LEAGUE, POSITIONS)
+                          round_cost, DEFAULT_LEAGUE)
 
 
 def _valued_board():

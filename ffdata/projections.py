@@ -102,6 +102,8 @@ def walk_forward(
         chunks.append(
             test[["season", "week", "player_id", "position", "fp"]].assign(pred=preds)
         )
+    if not chunks:  # no test week had enough history -- return empty, don't crash
+        return pd.DataFrame(columns=["season", "week", "player_id", "position", "fp", "pred"])
     return pd.concat(chunks, ignore_index=True)
 
 

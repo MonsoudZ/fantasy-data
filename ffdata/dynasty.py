@@ -25,16 +25,24 @@ from .draft import POSITIONS, draft_board, _season_agg, _roster_info
 _MIN_AGE, _MAX_AGE = 21, 36
 
 
-def age_curves(con=None) -> dict:
+def age_curves(con=None, before_season: int | None = None) -> dict:
     """Per-position relative value (0-1) by age.
 
     Built with the delta method: average the year-over-year PPG change for the
     SAME player aging A -> A+1, then cumulate into a curve. This removes the
     survivorship bias that inflates naive "average PPG by age" (only good players
     survive to older ages, so the raw average never declines).
+
+    `before_season`: if given, only seasons strictly before it feed the curves.
+    A dynasty valuation made in the preseason of season S must not learn its age
+    curves from S or later (that would be look-ahead); pass ``before_season=S``.
     """
     con = con or connect()
     m = _season_agg(con).merge(_roster_info(con), on=["player_id", "season"], how="inner")
+    if before_season is not None:
+        # Drop target-or-later seasons before the shift(-1) below, so no A->A+1
+        # transition can peek into the season being valued.
+        m = m[m["season"] < before_season]
     m = m[m["games"] >= 6].copy()
     m["age"] = m["season"] - m["birth_year"]
     m["ppg"] = m["fp"] / m["games"].clip(lower=1)
@@ -64,7 +72,7 @@ def dynasty_board(target_season: int, years: int = 4, discount: float = 0.85,
     board = draft_board(target_season, con=con)
     if board.empty:
         return board
-    curves = age_curves(con)
+    curves = age_curves(con, before_season=target_season)
     ri = _roster_info(con)
     ages = ri[ri["season"] == target_season][["player_id", "birth_year"]]
     board = board.merge(ages, on="player_id", how="left")

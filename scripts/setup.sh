@@ -12,9 +12,8 @@ PY="${PYTHON:-python3}"
 
 echo "==> Installing dependencies"
 $PY -m pip install --quiet --upgrade pip
-$PY -m pip install --quiet -r requirements-dev.txt              # core + pytest
-$PY -m pip install --quiet fastapi "uvicorn[standard]" || echo "   (web UI deps skipped)"
-$PY -m pip install --quiet torch || echo "   (torch skipped — optional neural model)"
+$PY -m pip install --quiet -e ".[dev,web]"                     # core + tests/lint + web UI
+$PY -m pip install --quiet -e ".[neural]" || echo "   (torch skipped — optional neural model)"
 
 echo "==> Ingesting nflverse data (2019-2025 core + 2026 rosters)"
 $PY -m ffdata.cli --seasons 2019-2025                          # weekly/injuries/snaps/rosters/schedules

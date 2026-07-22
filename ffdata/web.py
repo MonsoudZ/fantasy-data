@@ -11,12 +11,13 @@ after that, projections and optimization are seconds.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .draft import DEFAULT_LEAGUE, best_available, draft_board
 from .features import build_features
@@ -26,6 +27,8 @@ from .optimize import LineupOptimizer, _assemble, _match
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD
 
+_log = logging.getLogger("ffdata.web")
+
 _RULES = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
 _SIMS: dict = {}
 _BOARDS: dict = {}
@@ -33,19 +36,32 @@ _DRAFT: dict = {}
 _FEATS: dict = {}
 _STATIC = Path(__file__).parent / "static"
 
+# Each fitted simulator/board/feature frame is large. Cap the per-config caches
+# so a stream of distinct (scoring, projector, season, week) requests can't grow
+# memory without bound; evict the oldest entry (dicts preserve insertion order).
+_MAX_CACHE = 16
+
+
+def _cache_put(cache: dict, key, value):
+    if key not in cache and len(cache) >= _MAX_CACHE:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+    return value
+
 
 def _sim(scoring: str, projector: str) -> MatchupSimulator:
     key = (scoring, projector)
     if key not in _SIMS:
-        _SIMS[key] = MatchupSimulator.fit(projector=projector, rules=_RULES[scoring])
+        _cache_put(_SIMS, key, MatchupSimulator.fit(projector=projector, rules=_RULES[scoring]))
     return _SIMS[key]
 
 
 def _board(scoring: str, projector: str, season: int, week: int):
+    sim = _sim(scoring, projector)
     key = (scoring, projector, season, week)
     if key not in _BOARDS:
-        _BOARDS[key] = _sim(scoring, projector).project(season, week).reset_index(drop=True)
-    return _sim(scoring, projector), _BOARDS[key]
+        _cache_put(_BOARDS, key, sim.project(season, week).reset_index(drop=True))
+    return sim, _BOARDS[key]
 
 
 def _names(text: str) -> list[str]:
@@ -66,17 +82,17 @@ app = FastAPI(title="ff-data lineup optimizer")
 
 
 class OptRequest(BaseModel):
-    season: int = current_nfl_season()
-    week: int
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    week: int = Field(ge=1, le=22)
     scoring: str = "ppr"
     projector: str = "gbm"
     mode: str = "h2h"
     roster: str = ""
     opponent: str = ""
     full_slate: bool = False
-    ceiling: float = 0.90
-    stack_size: int = 2
-    bringback: int = 1
+    ceiling: float = Field(0.90, ge=0.5, lt=1.0)
+    stack_size: int = Field(2, ge=1, le=5)
+    bringback: int = Field(1, ge=0, le=3)
 
 
 @app.get("/")
@@ -94,8 +110,9 @@ def players(req: OptRequest):
     """The full projection board for a week -- every projectable player."""
     try:
         _, board = _board(req.scoring, req.projector, req.season, req.week)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("projection board failed (%s)", req)
+        return {"ok": False, "error": "could not build the projection board (see server logs)"}
     if board.empty:
         return {"ok": False, "error": f"No data for {req.season} week {req.week}."}
     rows = [{"name": r["player_display_name"], "position": r["position"],
@@ -110,8 +127,9 @@ def optimize(req: OptRequest):
         return {"ok": False, "error": "bad scoring or projector"}
     try:
         sim, board = _board(req.scoring, req.projector, req.season, req.week)
-    except Exception as exc:  # noqa: BLE001 - surface to the UI
-        return {"ok": False, "error": f"could not build projections: {exc}"}
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("projection build failed (%s)", req)
+        return {"ok": False, "error": "could not build projections (see server logs)"}
     if board.empty:
         return {"ok": False, "error": f"No projections for {req.season} week {req.week}. "
                 f"Ingest it first: python -m ffdata.cli --seasons {req.season}"}
@@ -158,11 +176,11 @@ def optimize(req: OptRequest):
 
 
 class DraftRequest(BaseModel):
-    season: int = current_nfl_season()
-    teams: int = 12
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    teams: int = Field(12, ge=2, le=32)
     drafted: list[str] = []
     position: str | None = None
-    n: int = 50
+    n: int = Field(50, ge=1, le=500)
 
 
 @app.post("/api/draft")
@@ -170,9 +188,10 @@ def api_draft(req: DraftRequest):
     key = (req.season, req.teams)
     try:
         if key not in _DRAFT:
-            _DRAFT[key] = draft_board(req.season, {**DEFAULT_LEAGUE, "teams": req.teams})
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
+            _cache_put(_DRAFT, key, draft_board(req.season, {**DEFAULT_LEAGUE, "teams": req.teams}))
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("draft_board failed (%s)", key)
+        return {"ok": False, "error": "could not build the draft board (see server logs)"}
     board = _DRAFT[key]
     if board.empty:
         return {"ok": False, "error": f"No draftable data for {req.season}. Ingest it first."}
@@ -184,8 +203,8 @@ def api_draft(req: DraftRequest):
 
 
 class PropsRequest(BaseModel):
-    season: int = current_nfl_season()
-    week: int
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    week: int = Field(ge=1, le=22)
     lines: str = ""
 
 
@@ -212,10 +231,12 @@ def api_props(req: PropsRequest):
         return {"ok": False, "error": "No valid prop lines. Format: player,market,line,over_odds,under_odds"}
     try:
         if req.season not in _FEATS:
-            _FEATS[req.season] = build_features(seasons=list(range(2019, req.season + 1)))
+            _cache_put(_FEATS, req.season,
+                       build_features(seasons=list(range(2019, req.season + 1))))
         edges = price_props(prop_df, req.season, req.week, feats=_FEATS[req.season], threshold=-999)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"could not price props: {exc}"}
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("price_props failed (season=%s week=%s)", req.season, req.week)
+        return {"ok": False, "error": "could not price props (see server logs)"}
     return {"ok": True, "priced": len(edges),
             "edges": edges.to_dict("records"),
             "markets": sorted({m for m in prop_df["market"].unique()})}

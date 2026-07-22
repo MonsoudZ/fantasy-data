@@ -29,6 +29,9 @@ restores it while preserving each player's calibrated marginal. Pass
 
 from __future__ import annotations
 
+import warnings
+from importlib.util import find_spec
+
 import numpy as np
 import pandas as pd
 
@@ -96,11 +99,27 @@ class MatchupSimulator:
         """Build the simulator. `projector`: "neural" (the promoted GRU, most
         accurate) or "gbm" (faster). `rules`: a ScoringRules for the fantasy-point
         target (default PPR). Both feed a residual sampler built from out-of-
-        sample predictions -- in-sample residuals understate variance."""
+        sample predictions -- in-sample residuals understate variance.
+
+        The neural projector needs PyTorch (an optional dependency). If "neural"
+        is requested but torch isn't installed, we warn and fall back to "gbm"
+        rather than crash, so the default works on a core-only install."""
         from .scoring import PPR
         resid_seasons = resid_seasons or [2023, 2024]
         seasons = list(range(train_from, max(resid_seasons) + 1))
         feats = build_features(seasons=seasons, positions=positions, rules=rules or PPR)
+
+        # find_spec locates torch WITHOUT importing it, preserving the lazy-import
+        # ordering neural.py needs for OpenMP (LightGBM must init first).
+        if projector == "neural" and find_spec("torch") is None:
+            warnings.warn(
+                "projector='neural' requires PyTorch, which is not installed; "
+                "falling back to the GBM projector. Install it with "
+                "`pip install ff-data[neural]` (or `pip install torch`).",
+                RuntimeWarning, stacklevel=2,
+            )
+            projector = "gbm"
+
         if projector == "neural":
             from .neural import NeuralProjector, neural_residuals
             resid = neural_residuals(feats, resid_seasons)

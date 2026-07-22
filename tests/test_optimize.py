@@ -28,6 +28,17 @@ class _FakeSimCorr:
     csampler = _FakeCorrSampler()
 
 
+def _assert_valid_lineup(lineup, pool):
+    """A lineup [(slot, name), ...] must have no duplicate players and every
+    player must be eligible for its slot -- checked on the FINAL lineup, not just
+    the greedy start, so a bad hill-climb swap can't slip through."""
+    pos = dict(zip(pool["player_display_name"], pool["position"]))
+    names = [n for _, n in lineup]
+    assert len(set(names)) == len(names), f"duplicate player in lineup: {names}"
+    for slot, name in lineup:
+        assert pos[name] in _ELIGIBLE[slot], f"{name} ({pos[name]}) ineligible for slot {slot}"
+
+
 def _pool():
     rows = [("QB1", "QB", 20), ("QB2", "QB", 18),
             ("RB1", "RB", 16), ("RB2", "RB", 14), ("RB3", "RB", 10),
@@ -73,6 +84,9 @@ def test_optimize_returns_valid_lineups_and_never_worse_than_points():
     # Hill-climb starts from the points lineup, so it can never end up worse.
     assert res["optimal_win_prob"] >= res["points_win_prob"]
     assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
+    # The hill-climbed result must still be a legal lineup (no dupes, slot-eligible).
+    _assert_valid_lineup(res["optimal_lineup"], pool)
+    _assert_valid_lineup(res["points_lineup"], pool)
 
 
 def test_tournament_returns_valid_lineup_and_never_lowers_the_ceiling():
@@ -82,6 +96,7 @@ def test_tournament_returns_valid_lineup_and_never_lowers_the_ceiling():
     # Hill-climb starts at max-points, so the ceiling can only improve.
     assert res["optimal"]["ceiling"] >= res["points"]["ceiling"]
     assert isinstance(res["optimal"]["stacks"], list)
+    _assert_valid_lineup(res["optimal"]["lineup"], pool)
 
 
 def test_game_stack_builds_a_qb_receiver_stack():
@@ -102,6 +117,7 @@ def test_game_stack_builds_a_qb_receiver_stack():
     assert "KC" in res["optimal"]["stacks"]           # QB + own receiver present
     names = [n for _, n in res["optimal"]["lineup"]]
     assert {"KC_QB", "KC_WR1", "KC_TE", "LV_WR"}.issubset(names)
+    _assert_valid_lineup(res["optimal"]["lineup"], pool)
 
 
 def test_optimize_uses_the_joint_correlated_sampler_when_available():

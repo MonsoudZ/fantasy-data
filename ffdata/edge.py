@@ -182,7 +182,6 @@ def find_edges(
 
     bets = []
     for name, pcol, faircol, yes_odds, no_odds, yes_win, no_win in markets:
-        edge = m[pcol] - m[faircol]
         for _, r in m.iterrows():
             e = r[pcol] - r[faircol]
             if e > threshold:      # model likes the "yes" side

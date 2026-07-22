@@ -1,2 +1,2 @@
--r requirements.txt
-pytest>=8.0
+# Core + test/lint tooling (pytest, ruff, pytest-cov), from pyproject's [dev] extra.
+-e .[dev]

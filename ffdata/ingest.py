@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import datetime as dt
 import io
-import sys
 import urllib.request
 from pathlib import Path
 
@@ -74,8 +73,16 @@ def ingest(
     seasons: list[int],
     force: bool = False,
     log=print,
-) -> None:
+) -> list[tuple[str, str]]:
+    """Download the requested datasets into the lake.
+
+    Returns a list of ``(target, error)`` for every download that failed. The
+    list is empty on a fully successful run; callers (see ``cli.main``) treat a
+    non-empty list as a failure and exit non-zero, so a fully-failed ingest is
+    never mistaken for success.
+    """
     this_season = current_nfl_season()
+    failures: list[tuple[str, str]] = []
     for name in datasets:
         spec = SOURCES[name]
         if spec["seasonal"]:
@@ -96,5 +103,10 @@ def ingest(
             try:
                 rows = _fetch_to_parquet(url, dest, normalize=NORMALIZERS.get(name))
                 log(f"  ok    {name}{suffix}: {rows:,} rows")
-            except Exception as exc:  # noqa: BLE001 - report and continue
-                log(f"  FAIL  {name}{suffix}: {exc}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 - collect and report at the end
+                # `log` may be any callable; don't assume it accepts a `file=`
+                # kwarg. Route the human-readable line through it, and return the
+                # failure so the caller can decide the exit status.
+                log(f"  FAIL  {name}{suffix}: {exc}")
+                failures.append((f"{name}{suffix}", str(exc)))
+    return failures

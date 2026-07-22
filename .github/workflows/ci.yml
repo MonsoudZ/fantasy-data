@@ -30,8 +30,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Lint
+        run: ruff check .
+
       - name: Run tests
         # The data lake is not committed, so integration tests skip here;
-        # the synthetic unit tests cover scoring, leak-free features, and
-        # betting math deterministically.
-        run: pytest
+        # the synthetic unit tests cover scoring, leak-free features, the
+        # walk-forward protocol, the optimizer, and betting math deterministically.
+        run: pytest --cov=ffdata --cov-report=term-missing

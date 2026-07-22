@@ -4,7 +4,6 @@ Run `python -m ffdata.cli` first to enable these locally; CI skips them (no
 committed data) and relies on the synthetic unit tests.
 """
 
-import pandas as pd
 
 from ffdata.db import connect
 from ffdata.scoring import score, PPR, STANDARD

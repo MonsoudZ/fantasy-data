@@ -19,7 +19,14 @@ projections, lineup optimization, and edge-finding vs Vegas lines.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt   # core pipeline
+```
+
+Dependencies are declared in `pyproject.toml`. Optional features are extras:
+
+```bash
+pip install -e ".[neural]"   # the GRU projector (PyTorch)
+pip install -e ".[web]"      # the FastAPI web UI
 ```
 
 The projection and edge models use LightGBM, which needs an OpenMP runtime:
@@ -32,7 +39,7 @@ sudo apt-get install libgomp1  # Debian/Ubuntu
 ## Ingest
 
 ```bash
-python -m ffdata.cli                          # 2018-present, all core datasets
+python -m ffdata.cli                          # 2019-present, all core datasets
 python -m ffdata.cli --seasons 2015-2024      # more history
 python -m ffdata.cli --pbp                    # include play-by-play (large)
 python -m ffdata.cli --force                  # re-download everything
