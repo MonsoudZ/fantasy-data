@@ -28,6 +28,8 @@ import lightgbm as lgb
 
 from .features import build_features, feature_columns
 from .betting import american_to_prob, american_profit, _prob_over
+from .gbm import gbm_params
+from .ingest import FIRST_SEASON
 from .optimize import _norm
 
 # Prop market -> the positions that accrue that stat.
@@ -38,8 +40,7 @@ MARKETS = {
     "receptions": ("WR", "TE", "RB"),
     "rushing_yards": ("RB", "QB", "WR"),
 }
-_PARAMS = dict(n_estimators=300, learning_rate=0.03, num_leaves=31, min_child_samples=40,
-               subsample=0.8, colsample_bytree=0.8, random_state=0, verbose=-1, n_jobs=4)
+_PARAMS = gbm_params(n_estimators=300, num_leaves=31, min_child_samples=40)
 
 
 def _ev_side(p_over: float, over_odds: float, under_odds: float) -> tuple[str, float]:
@@ -86,7 +87,7 @@ def price_props(prop_df: pd.DataFrame, season: int, week: int,
     Returns one row per prop with model P(over), market fair P(over), edge, and
     the best-side EV per 1u; sorted by EV, kept where EV > `threshold`.
     """
-    feats = build_features(seasons=list(range(2019, season + 1))) if feats is None else feats
+    feats = build_features(seasons=list(range(FIRST_SEASON, season + 1))) if feats is None else feats
     out = []
     for market, mdf in prop_df.groupby("market"):
         if market not in MARKETS:

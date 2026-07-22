@@ -31,6 +31,7 @@ import pandas as pd
 import lightgbm as lgb
 
 from .db import connect
+from .gbm import gbm_params
 from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
 
 POSITIONS = ("QB", "RB", "WR", "TE")
@@ -44,8 +45,7 @@ _FEATS = ["p_games", "p_fp", "p_ppg", "p_targets", "p_carries", "p_receptions",
           "p_rec_yds", "p_rush_yds", "p_pass_yds", "p_pass_tds", "p_rush_tds",
           "p_rec_tds", "p_tgt_share", "age", "years_exp",
           "team_changed", "coach_changed", "sos"] + [f"is_{p}" for p in POSITIONS]
-_PARAMS = dict(n_estimators=400, learning_rate=0.03, num_leaves=31, min_child_samples=20,
-               subsample=0.8, colsample_bytree=0.8, random_state=0, verbose=-1, n_jobs=4)
+_PARAMS = gbm_params(n_estimators=400, num_leaves=31, min_child_samples=20)
 # The GBM alone ranks slightly *worse* than raw prior-season points (it chases
 # breakouts); a blend beats both -- the model handles age/injury/regression, the
 # prior-year anchor keeps proven volume honest. Validated on 2023-24.
@@ -200,9 +200,8 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> p
 # validate with backtest_rookies() before trusting the magnitudes.
 # --------------------------------------------------------------------------- #
 _ROOKIE_FEATS = ["pick", "log_pick", "draft_round"] + [f"is_{p}" for p in POSITIONS]
-_ROOKIE_PARAMS = dict(n_estimators=300, learning_rate=0.03, num_leaves=16,
-                      min_child_samples=15, subsample=0.9, colsample_bytree=0.9,
-                      random_state=0, verbose=-1, n_jobs=4)
+_ROOKIE_PARAMS = gbm_params(n_estimators=300, num_leaves=16, min_child_samples=15,
+                            subsample=0.9, colsample_bytree=0.9)
 
 
 def _has_view(con, name: str) -> bool:

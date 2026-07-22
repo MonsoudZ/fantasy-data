@@ -26,15 +26,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgomp1
 
       - name: Install dependencies
+        # Include the web extra so the FastAPI layer is covered in CI (torch/the
+        # neural model stays out -- too heavy for CI, and omitted from coverage).
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -e ".[dev,web]"
 
       - name: Lint
         run: ruff check .
 
       - name: Run tests
-        # The data lake is not committed, so integration tests skip here;
-        # the synthetic unit tests cover scoring, leak-free features, the
-        # walk-forward protocol, the optimizer, and betting math deterministically.
+        # The data lake is not committed, so integration tests skip here; the
+        # synthetic unit tests cover scoring, leak-free features, the walk-forward
+        # protocol, the optimizer, betting math, and the web layer. Coverage is
+        # gated (fail_under in pyproject) so it can't silently regress.
         run: pytest --cov=ffdata --cov-report=term-missing

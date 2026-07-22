@@ -26,6 +26,7 @@ from scipy.stats import spearmanr
 from sklearn.metrics import mean_absolute_error
 
 from .features import build_features, feature_columns
+from .gbm import gbm_params
 
 
 def _order_key(df: pd.DataFrame) -> pd.Series:
@@ -57,11 +58,7 @@ class GBMProjector:
 
     def __init__(self, features: list[str] | None = None, **params):
         self.features = features or feature_columns()
-        self.params = dict(
-            n_estimators=400, learning_rate=0.03, num_leaves=31,
-            subsample=0.8, colsample_bytree=0.8, min_child_samples=40,
-            random_state=0, n_jobs=-1, verbose=-1,
-        )
+        self.params = gbm_params(n_estimators=400, num_leaves=31, min_child_samples=40)
         self.params.update(params)
         self.model: lgb.LGBMRegressor | None = None
 

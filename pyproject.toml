@@ -44,3 +44,18 @@ target-version = "py311"
 # this codebase: compact scoring/optimizer lambdas, and neural.py's documented
 # lazy `import torch` that MUST run after LightGBM initializes OpenMP.
 ignore = ["E731", "E402"]
+
+[tool.coverage.run]
+source = ["ffdata"]
+# neural.py needs torch (optional, not installed in CI) so it can't run there.
+omit = ["ffdata/neural.py"]
+
+[tool.coverage.report]
+# CLI entrypoints and __main__ blocks are exercised by hand, not the unit suite.
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "def main\\(",
+]
+# A floor below current (~66%) so coverage can't silently rot. Much of the gap is
+# integration paths that need the (uncommitted) data lake -- unreachable in CI.
+fail_under = 60

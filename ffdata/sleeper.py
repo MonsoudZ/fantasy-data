@@ -32,7 +32,7 @@ _SKILL = ("QB", "RB", "WR", "TE")
 # HTTP client (thin; not unit-tested -- needs the network)
 # --------------------------------------------------------------------------- #
 
-class SleeperClient:
+class SleeperClient:  # pragma: no cover - thin network I/O, exercised via a fake in tests
     """Minimal client over Sleeper's public endpoints. Injectable for testing."""
 
     def __init__(self, base: str = _BASE, timeout: int = 30):

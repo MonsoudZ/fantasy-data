@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pandas as pd
 
+from .db import RAW
 from .sources import SOURCES
 
-RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
+# Weekly stats begin at 2019 under nflverse's `stats_player_week` asset; earlier
+# seasons 404 on that path. The shared data floor for CLIs and feature builds.
+FIRST_SEASON = 2019
 UA = {"User-Agent": "ff-data-ingest/0.1"}
 
 # Offensive positions kept from the (all-position) weekly file.
@@ -48,10 +53,25 @@ def current_nfl_season(today: dt.date | None = None) -> int:
     return today.year if today.month >= 9 else today.year - 1
 
 
-def _download(url: str) -> bytes:
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return resp.read()
+def _download(url: str, retries: int = 3, backoff: float = 2.0) -> bytes:
+    """Fetch bytes, retrying transient failures with exponential backoff.
+
+    Connection errors, timeouts, and 5xx responses are retried; 4xx (missing
+    asset, policy denial) fail fast because a retry won't change the outcome.
+    """
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == retries:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == retries:
+                raise
+        time.sleep(backoff * (2 ** attempt))
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def _fetch_to_parquet(url: str, dest: Path, normalize=None) -> int:

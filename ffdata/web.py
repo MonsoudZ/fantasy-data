@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .draft import DEFAULT_LEAGUE, best_available, draft_board
 from .features import build_features
-from .ingest import current_nfl_season
+from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match
 from .props import price_props
@@ -270,7 +270,7 @@ def api_props(req: PropsRequest):
     try:
         if req.season not in _FEATS:
             _cache_put(_FEATS, req.season,
-                       build_features(seasons=list(range(2019, req.season + 1))))
+                       build_features(seasons=list(range(FIRST_SEASON, req.season + 1))))
         edges = price_props(prop_df, req.season, req.week, feats=_FEATS[req.season], threshold=-999)
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("price_props failed (season=%s week=%s)", req.season, req.week)
