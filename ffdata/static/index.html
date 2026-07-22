@@ -176,8 +176,12 @@
             <div style="flex:1"><label>Season</label><input type="number" id="d-season" value="2024" /></div>
             <div style="flex:1"><label>Teams</label><input type="number" id="d-teams" value="12" min="4" max="16" /></div>
           </div>
+          <label>Scoring</label>
+          <div class="seg" id="d-scoring">
+            <button data-v="ppr" class="on">PPR</button><button data-v="half">Half</button><button data-v="standard">Standard</button>
+          </div>
           <button class="go" id="d-go">Load draft board</button>
-          <div class="hint">PPR values. First load trains the season model (~20 s).</div>
+          <div class="hint">VOR &amp; auction values reflect the scoring above. First load trains the season model (~20 s).</div>
           <label>Drafted <span id="d-count" style="text-transform:none;color:var(--muted)"></span></label>
           <div class="drafted" id="d-drafted"><span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span></div>
         </div>
@@ -289,17 +293,19 @@ function renderLineup(d){
 }
 
 /* ============ DRAFT ============ */
-const D = { board:[], drafted:new Set(), pos:"ALL", q:"" };
-$("#d-go").onclick=async()=>{
+const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr" };
+seg("d-scoring", v=>{ D.scoring=v; if(D.board.length) loadDraft(); });   // re-price on change once loaded
+async function loadDraft(){
   const btn=$("#d-go"); btn.disabled=true; btn.textContent="Loading…";
   $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>Training season model…</div>`;
   try{
-    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,n:300})})).json();
+    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,n:300})})).json();
     if(!d.ok){ $("#d-board").innerHTML=`<div class="err">${d.error}</div>`; }
     else { D.board=d.players; renderFilters(); renderBoard(); }
   }catch(e){ $("#d-board").innerHTML=`<div class="err">${e}</div>`; }
   btn.disabled=false; btn.textContent="Reload draft board";
-};
+}
+$("#d-go").onclick=loadDraft;
 function renderFilters(){ $("#d-filters").innerHTML=["ALL","QB","RB","WR","TE"].map(p=>`<button class="fchip ${p===D.pos?'on':''}" data-p="${p}">${p}</button>`).join("");
   document.querySelectorAll("#d-filters .fchip").forEach(b=>b.onclick=()=>{ D.pos=b.dataset.p; renderFilters(); renderBoard(); }); }
 $("#d-search").oninput=e=>{ D.q=e.target.value.trim(); renderBoard(); };
