@@ -27,6 +27,7 @@ Dependencies are declared in `pyproject.toml`. Optional features are extras:
 ```bash
 pip install -e ".[neural]"   # the GRU projector (PyTorch)
 pip install -e ".[web]"      # the FastAPI web UI
+pip install -e ".[advice]"   # grounded Claude explanations (needs ANTHROPIC_API_KEY)
 ```
 
 The projection models use LightGBM, which needs an OpenMP runtime:
@@ -175,7 +176,10 @@ A polished, tabbed browser front-end over the whole toolkit:
   A **Redraft / Dynasty** toggle switches to multi-year, age-curve-adjusted values.
   Tools under the board: **keeper** surplus (value − cost, by auction $ or draft
   round), **trade** evaluation (value per side + verdict), and **compare** up to
-  3 players side by side (proj / VOR / auction / rank, best-value flagged).
+  3 players side by side (proj / VOR / auction / rank, best-value flagged). Each of
+  those three can show an **"Explain — why?"** button (when advice is enabled) that
+  asks Claude to talk through the decision — but **grounded**: it reasons only from
+  the same numbers on screen (see below), so it can't invent a stat.
 - **Betting** — two views. **Player props**: paste sportsbook prop lines, get the
   +EV bets ranked. **Game lines**: our total/spread/moneyline forecast beside the
   market (lines from the schedule, nothing to paste) — informational, since game
@@ -192,6 +196,25 @@ like a shallow 1-QB league), your roster, and the draft — saved as a league + 
 and read-only, so there's no login. (ESPN needs `espn_s2`/`SWID` cookies and
 Yahoo needs OAuth, so those aren't built.) The mapping is unit-tested; validate
 the live fetch against your own account.
+
+**Grounded advice (optional).** The compare / keeper / trade tools can explain
+themselves in plain English. Install the extra and set a key:
+
+```bash
+pip install -e ".[advice]"
+export ANTHROPIC_API_KEY=sk-...
+```
+
+Then an **"Explain — why?"** button appears on those results. It asks Claude
+(`claude-opus-4-8`) to read the decision — but on a tight leash: the model is
+handed only the numbers the tool already computed (projection, VOR, auction $,
+overall/positional rank, keeper surplus, per-side trade value) plus your league's
+scoring, and the system prompt forbids introducing any stat that isn't in that
+set. So it weighs and phrases the trade-offs the numbers imply and cites the
+figures, but it can't hallucinate a projection. Without the extra (or the key)
+the feature is simply off — `/api/config` reports it and the button stays hidden.
+The prompt assembly and the availability gate are unit-tested with a mocked
+client; validate the live call once you've set a key.
 
 The first request for a given model trains it (~20 s for the draft board, ~2 min
 for the lineup/props models), then it's cached and instant.

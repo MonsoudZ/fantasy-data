@@ -97,6 +97,13 @@
     border-radius:12px; padding:16px; font-size:14px; }
   .empty { text-align:center; color:var(--muted); padding:60px 20px; }
   .empty .big { font-size:40px; margin-bottom:8px; }
+  .advice-wrap { margin-top:12px; }
+  .advice-btn { padding:9px 16px; font-size:13px; }
+  .advice-mount:empty { display:none; }
+  .advice { margin-top:10px; background:var(--card2); border:1px solid var(--line); border-left:3px solid var(--accent2);
+    border-radius:12px; padding:14px 16px; font-size:13.5px; line-height:1.6; color:var(--text); }
+  .advice p { margin:0 0 10px; } .advice p:last-child { margin-bottom:0; }
+  .advice ul { margin:0 0 10px; padding-left:20px; } .advice li { margin:3px 0; }
   .spinner { text-align:center; color:var(--muted); padding:50px 20px; }
   .ring { width:44px; height:44px; border-radius:50%; margin:0 auto 14px; border:4px solid var(--line);
     border-top-color:var(--accent2); animation:spin 1s linear infinite; }
@@ -297,7 +304,42 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
 function seg(id, cb){ document.querySelectorAll(`#${id} button`).forEach(b=>b.onclick=()=>{
   document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.remove("on")); b.classList.add("on"); cb&&cb(b.dataset.v); }); }
 
-fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } }).catch(()=>{});
+const CFG = { advice:false };
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+// Model output is our own, but escape it anyway, then render blank-line paragraphs
+// and simple "- " bullets. No raw HTML from the response ever reaches the DOM.
+function fmtAdvice(t){
+  return esc(t).trim().split(/\n{2,}/).map(block=>{
+    const lines=block.split("\n");
+    if(lines.every(l=>/^\s*[-*]\s+/.test(l)))
+      return `<ul>${lines.map(l=>`<li>${l.replace(/^\s*[-*]\s+/,"")}</li>`).join("")}</ul>`;
+    return `<p>${block.replace(/\n/g,"<br>")}</p>`;
+  }).join("");
+}
+async function runAdvice(kind, payload, outEl, btn){
+  btn.disabled=true;
+  outEl.innerHTML=`<div class="spinner"><div class="ring"></div>Thinking…</div>`;
+  try{
+    const d=await (await fetch("/api/advice",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({...payload, kind})})).json();
+    outEl.innerHTML = d.ok ? `<div class="advice">${fmtAdvice(d.advice)}</div>` : `<div class="err">${d.error}</div>`;
+  }catch(e){ outEl.innerHTML=`<div class="err">Request failed.</div>`; }
+  btn.disabled=false;
+}
+// Appends an "Explain — why?" button (+ output) to a result container, when the
+// advice layer is enabled server-side. The grounded explanation reuses the same
+// config/inputs the result was built from.
+function mountExplain(containerSel, kind, payload){
+  if(!CFG.advice) return;
+  const wrap=document.createElement("div"); wrap.className="advice-wrap";
+  const btn=document.createElement("button"); btn.className="draftbtn advice-btn"; btn.textContent="Explain — why?";
+  const out=document.createElement("div"); out.className="advice-mount";
+  btn.onclick=()=>runAdvice(kind, payload, out, btn);
+  wrap.appendChild(btn); wrap.appendChild(out);
+  const host=$(containerSel); if(host) host.appendChild(wrap);
+}
+
+fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } CFG.advice=!!c.advice; }).catch(()=>{});
 
 /* ============ LINEUP ============ */
 const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
@@ -519,6 +561,7 @@ $("#kt-compare-go").onclick=async()=>{
       <div style="margin:8px 0"><span class="pos ${p.position}">${p.position}</span> <span class="team">${p.position}${p.position_rank} · #${p.overall_rank} overall</span></div>
       <div class="hint">Proj <b style="color:var(--text)">${p.proj}</b> · VOR <b style="color:var(--accent2)">${p.vor}</b> · $${p.auction}</div></div>`;
     $("#kt-compare-out").innerHTML=`<div class="row">${d.players.map(card).join("")}</div>${d.missing&&d.missing.length?`<div class="warn" style="margin-top:8px">Not on board: ${d.missing.join(", ")}</div>`:""}`;
+    mountExplain("#kt-compare-out", "compare", {...dcfg(), players});
   }catch(e){ $("#kt-compare-out").innerHTML=`<div class="err">Request failed.</div>`; }
 };
 $("#kt-keeper-go").onclick=async()=>{
@@ -533,6 +576,7 @@ $("#kt-keeper-go").onclick=async()=>{
     if(!d.keepers.length){ $("#kt-keeper-out").innerHTML=`<div class="empty">No matching players on the board.</div>`; return; }
     $("#kt-keeper-out").innerHTML=`<table><thead><tr><th>Player</th><th></th><th class="num">Value $</th><th class="num">Cost $</th><th class="num">Surplus</th></tr></thead><tbody>${
       d.keepers.map(k=>`<tr class="pos-row"><td class="pname">${k.player}</td><td><span class="pos ${k.position}">${k.position}</span></td><td class="num">$${k.value}</td><td class="num" style="color:var(--muted)">$${k.cost}</td><td class="num ${k.surplus>=0?'ev-pos':'ev-neg'}">${k.surplus>=0?'+':''}${k.surplus}</td></tr>`).join("")}</tbody></table>`;
+    mountExplain("#kt-keeper-out", "keeper", {...dcfg(), keepers, cost_type:KT.costType});
   }catch(e){ $("#kt-keeper-out").innerHTML=`<div class="err">Request failed.</div>`; }
 };
 $("#kt-trade-go").onclick=async()=>{
@@ -545,6 +589,7 @@ $("#kt-trade-go").onclick=async()=>{
     if(!d.ok){ $("#kt-trade-out").innerHTML=`<div class="err">${d.error}</div>`; return; }
     const side=(s,label)=>`<div style="flex:1"><div class="lab">${label} — $${s.auction} · ${s.vor} VOR</div>${s.players.map(p=>`<div class="pr"><span class="pos ${p.position}">${p.position}</span><span class="nm">${p.player}</span><span class="pd">$${p.value}</span></div>`).join("")||'<div class="hint">— nobody matched —</div>'}</div>`;
     $("#kt-trade-out").innerHTML=`<div class="headline"><div><div class="lab">Verdict</div><div class="val" style="font-size:22px">${d.verdict}</div></div></div><div class="row" style="margin-top:10px">${side(d.side_a,"Side A")}${side(d.side_b,"Side B")}</div>`;
+    mountExplain("#kt-trade-out", "trade", {...dcfg(), side_a, side_b});
   }catch(e){ $("#kt-trade-out").innerHTML=`<div class="err">Request failed.</div>`; }
 };
 

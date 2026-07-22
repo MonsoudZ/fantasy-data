@@ -26,11 +26,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgomp1
 
       - name: Install dependencies
-        # Include the web extra so the FastAPI layer is covered in CI (torch/the
-        # neural model stays out -- too heavy for CI, and omitted from coverage).
+        # Include web + advice extras so the FastAPI layer and the (mock-driven)
+        # advice tests are covered in CI (torch/the neural model stays out -- too
+        # heavy for CI, and omitted from coverage). No ANTHROPIC_API_KEY is set,
+        # so advice.available() is False in CI and no live call is ever made.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,web]"
+          pip install -e ".[dev,web,advice]"
 
       - name: Lint
         run: ruff check .

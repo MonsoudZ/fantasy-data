@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from . import advice
 from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, trade_value
 from .dynasty import dynasty_board
 from .features import build_features
@@ -28,7 +29,7 @@ from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match, _norm
 from .props import price_props
-from .scoring import PPR, HALF_PPR, STANDARD, rules_from
+from .scoring import PPR, HALF_PPR, STANDARD, preset_name, rules_from, rules_to_dict
 from .sleeper import import_league, list_user_leagues
 from .store import (
     League, Team, delete_league, delete_team, list_leagues, list_teams,
@@ -120,7 +121,7 @@ def index():
 
 @app.get("/api/config")
 def config():
-    return {"season": current_nfl_season()}
+    return {"season": current_nfl_season(), "advice": advice.available()}
 
 
 @app.post("/api/players")
@@ -277,18 +278,24 @@ def api_draft(req: DraftRequest):
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
 
 
-@app.post("/api/keepers")
-def api_keepers(req: KeeperRequest):
-    board, err = _board_or_error(req)
-    if err:
-        return err
+def _keeper_pairs(keepers: list) -> list[tuple[str, float]]:
+    """Clean [[player, cost], ...] into typed (name, cost) tuples, dropping junk."""
     pairs = []
-    for k in req.keepers:
+    for k in keepers:
         if isinstance(k, (list, tuple)) and len(k) >= 2:
             try:
                 pairs.append((str(k[0]), float(k[1])))
             except (ValueError, TypeError):
                 pass
+    return pairs
+
+
+@app.post("/api/keepers")
+def api_keepers(req: KeeperRequest):
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    pairs = _keeper_pairs(req.keepers)
     if not pairs:
         return {"ok": False, "error": "No valid keepers. Format: player, cost"}
     cost_type = req.cost_type if req.cost_type in ("auction", "round") else "auction"
@@ -310,26 +317,21 @@ class CompareRequest(BoardRequest):
     players: list[str] = []
 
 
-@app.post("/api/compare")
-def api_compare(req: CompareRequest):
-    board, err = _board_or_error(req)
-    if err:
-        return err
-    names = [n for n in req.players if str(n).strip()][:3]
-    if len(names) < 2:
-        return {"ok": False, "error": "Pick at least 2 players to compare."}
+def _compare_rows(board: pd.DataFrame, names: list[str]):
+    """(rows, missing) for the named players, each with overall/positional rank.
 
-    # draft_board is sorted by VOR desc, so row order == overall rank; positional
-    # rank is the running count within each position in that same order.
+    draft_board is sorted by VOR desc, so row order == overall rank; positional
+    rank is the running count within each position in that same order.
+    """
     board = board.reset_index(drop=True)
-    rows, pos_seen = {}, {}
+    index, pos_seen = {}, {}
     for i, r in board.iterrows():
         pos_seen[r["position"]] = pos_seen.get(r["position"], 0) + 1
-        rows[_norm(r["player"])] = (int(i) + 1, pos_seen[r["position"]], r)
+        index[_norm(r["player"])] = (int(i) + 1, pos_seen[r["position"]], r)
 
     out, missing = [], []
     for name in names:
-        hit = rows.get(_norm(name))
+        hit = index.get(_norm(name))
         if hit is None:
             missing.append(name)
             continue
@@ -338,10 +340,100 @@ def api_compare(req: CompareRequest):
                     "proj": round(float(r["proj"]), 1), "vor": round(float(r["vor"]), 1),
                     "auction": int(r["auction"]),
                     "overall_rank": overall, "position_rank": pos_rank})
+    return out, missing
+
+
+@app.post("/api/compare")
+def api_compare(req: CompareRequest):
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    names = [n for n in req.players if str(n).strip()][:3]
+    if len(names) < 2:
+        return {"ok": False, "error": "Pick at least 2 players to compare."}
+    out, missing = _compare_rows(board, names)
     if not out:
         return {"ok": False, "error": "None of those players are on the board.", "missing": missing}
     best = max(out, key=lambda p: p["vor"])["player"]     # highest VOR = best value
     return {"ok": True, "players": out, "best_value": best, "missing": missing}
+
+
+class AdviceRequest(BoardRequest):
+    """A grounded-explanation request over one decision (compare/keeper/trade).
+
+    Carries the board config (from BoardRequest) plus every kind's inputs; only
+    the fields for the chosen `kind` are read, so the UI can post the tool's
+    current state verbatim.
+    """
+    kind: str                        # "compare" | "keeper" | "trade"
+    players: list[str] = []          # compare
+    keepers: list = []               # keeper
+    cost_type: str = "auction"       # keeper
+    side_a: list[str] = []           # trade
+    side_b: list[str] = []           # trade
+
+
+def _scoring_facts(req: BoardRequest) -> dict:
+    """The league-scoring context every advice call is grounded in."""
+    rules = rules_from(req.scoring, req.rules)
+    cfg = _league_cfg(req.teams, req.lineup)
+    return {"scoring": preset_name(rules), "rules": rules_to_dict(rules),
+            "teams": req.teams, "superflex": bool(cfg.get("superflex"))}
+
+
+def _advice_facts(req: AdviceRequest, board: pd.DataFrame):
+    """Build (facts, error) for a request kind by reusing the engine outputs."""
+    if req.kind == "compare":
+        names = [n for n in req.players if str(n).strip()][:3]
+        if len(names) < 2:
+            return None, "Pick at least 2 players to compare."
+        rows, _ = _compare_rows(board, names)
+        if len(rows) < 2:
+            return None, "Need at least 2 of those players on the board."
+        return {"decision": "compare", "players": rows}, None
+    if req.kind == "keeper":
+        pairs = _keeper_pairs(req.keepers)
+        if not pairs:
+            return None, "No valid keepers. Format: player, cost"
+        cost_type = req.cost_type if req.cost_type in ("auction", "round") else "auction"
+        df = keeper_value(board, pairs, teams=req.teams, cost_type=cost_type)
+        if df.empty:
+            return None, "None of those keepers are on the board."
+        return {"decision": "keeper", "cost_type": cost_type,
+                "keepers": df.to_dict("records")}, None
+    if req.kind == "trade":
+        if not req.side_a and not req.side_b:
+            return None, "Add players to at least one side."
+        tv = trade_value(board, req.side_a, req.side_b)
+        if not tv["side_a"]["players"] and not tv["side_b"]["players"]:
+            return None, "None of those players are on the board."
+        return {"decision": "trade", **tv}, None
+    return None, f"unknown advice kind: {req.kind}"
+
+
+@app.post("/api/advice")
+def api_advice(req: AdviceRequest):
+    """A grounded, plain-English read of a compare/keeper/trade decision.
+
+    Reuses the same board + engine functions the tools do, hands the resulting
+    numbers (plus scoring context) to the advice layer, and returns its text.
+    """
+    if not advice.available():
+        return {"ok": False, "error": "Advice is off. Install '.[advice]' and set "
+                "ANTHROPIC_API_KEY to enable it."}
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    facts, ferr = _advice_facts(req, board)
+    if ferr:
+        return {"ok": False, "error": ferr}
+    facts = {**facts, **_scoring_facts(req)}
+    try:
+        text = advice.explain(req.kind, facts)
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("advice.explain failed (kind=%s)", req.kind)
+        return {"ok": False, "error": "could not generate advice (see server logs)"}
+    return {"ok": True, "kind": req.kind, "advice": text}
 
 
 class DynastyRequest(BoardRequest):

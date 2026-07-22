@@ -35,6 +35,7 @@ Network access required (nflverse pulls over HTTP).
 | `dynasty.py` | age curves (delta method) + multi-year dynasty value |
 | `store.py` | JSON persistence for saved leagues + lineup teams (incl. custom scoring) |
 | `sleeper.py` | import a league from Sleeper's public API (settings, scoring, roster, draft) |
+| `advice.py` | grounded Claude explanations of compare/keeper/trade decisions (opt-in) |
 | `web.py` `static/index.html` | FastAPI + tabbed UI |
 
 ## Common commands
@@ -95,6 +96,19 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   drafted and folds them into `draft_board` (`include_rookies=True`). ⚠️ Scaffolded
   but **not yet backtested on real data** — run `draft.backtest_rookies()` before
   trusting the magnitudes. Degrades to veterans-only if `draft_picks` isn't ingested.
+- **Grounded advice** (`advice.py`, "Explain — why?" buttons on the draft tab's
+  compare/keeper/trade results): asks Claude (`claude-opus-4-8`, adaptive thinking)
+  to explain a decision, but **grounded** — the system prompt forbids any stat not
+  in the `facts` dict, which is the engine's own output (proj/VOR/auction/rank +
+  keeper surplus / trade totals + the league's scoring). So it phrases and weighs
+  the trade-offs the numbers imply; it can't invent a projection. Optional extra
+  (`pip install '.[advice]'`), needs `ANTHROPIC_API_KEY`; `advice.available()`
+  gates it and `/api/config` exposes the flag so the UI only shows the button when
+  it's on. The endpoint (`/api/advice`, dispatch on `kind`) reuses the same board +
+  `keeper_value`/`trade_value`/compare-rows the tools do, so the explanation and
+  the table can never disagree. ⚠️ Prompt assembly + the availability gate are
+  unit-tested with a mocked client; the **live API path is unvalidated** (no egress
+  when built) — confirm once you set a key.
 - **Sleeper import** (`sleeper.py`, web tab): pulls a league by username via
   Sleeper's public read-only API (no auth) → saves a `store.League` (settings,
   exact custom scoring, drafted, starting lineup) + a `store.Team` (your roster).
