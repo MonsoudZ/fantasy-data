@@ -74,13 +74,16 @@ def _roster_info(con) -> pd.DataFrame:
 
 
 def _team_season(con) -> pd.DataFrame:
-    """The team a player played most for, per season (for roster-change signal)."""
+    """The team a player is rostered on, per season (for roster-change signal).
+
+    Sourced from `rosters`, not game logs, so it's available in the preseason
+    (e.g. a 2026 draft, before any 2026 games have been played)."""
     return con.sql("""
         select player_id, season, team from (
-            select player_id, season, recent_team as team, count(*) c,
-                   row_number() over (partition by player_id, season order by count(*) desc) rn
-            from weekly where season_type='REG'
-            group by player_id, season, recent_team)
+            select gsis_id as player_id, season, team, count(*) c,
+                   row_number() over (partition by gsis_id, season order by count(*) desc) rn
+            from rosters where team is not null and gsis_id is not null
+            group by gsis_id, season, team)
         where rn = 1
     """).df()
 
