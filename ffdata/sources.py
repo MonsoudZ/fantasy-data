@@ -56,6 +56,12 @@ SOURCES = {
         "url": f"{NFLVERSE}/draft_picks/draft_picks.parquet",
         "seasonal": False,
     },
+    # Depth charts per season -- published in the preseason, so a rookie's spot
+    # on the chart (starter vs buried) is known before any games are played.
+    "depth_charts": {
+        "url": f"{NFLVERSE}/depth_charts/depth_charts_{{season}}.parquet",
+        "seasonal": True,
+    },
     # Next Gen Stats: player-tracking metrics not derivable from the box score
     # (separation, cushion, air-yards share, CPOE, rush yards over expected).
     # One all-seasons file per stat type; week 0 rows are season aggregates.

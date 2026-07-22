@@ -114,3 +114,31 @@ def test_rookie_curve_is_monotone_in_draft_pick():
     assert len(m) > 20
     # Non-increasing in pick (ties allowed -- the curve is stepped).
     assert (m["proj"].diff().dropna() <= 1e-9).all()
+
+
+@requires_data_lake
+def test_rookie_context_reports_opportunity_not_projection():
+    """Vacated/returning production + depth chart, as CONTEXT for a human.
+    Deliberately not fed to the model -- it measured worse than pick alone."""
+    from ffdata.draft import rookie_context
+    c = rookie_context(2026)
+    assert c is not None and len(c) > 20
+    assert {"player", "position", "team", "pick", "vacated_fp",
+            "returning_fp", "depth_rank"}.issubset(c.columns)
+    # Can be slightly negative: a departed player may have scored net-negative
+    # points (interceptions/fumbles), so the vacated sum isn't floored at zero.
+    assert c["vacated_fp"].notna().all() and c["returning_fp"].notna().all()
+    assert c["vacated_fp"].between(-50, 1000).all()
+    assert c["pick"].is_monotonic_increasing          # ordered by draft pick
+    # Team context has to actually resolve -- a PFR/nflverse code mismatch would
+    # silently zero it out for GB/KC/LV/NE/NO/SF/TB/LA.
+    assert c["vacated_fp"].gt(0).mean() > 0.5
+
+
+@requires_data_lake
+def test_draft_capital_uses_nflverse_team_codes():
+    from ffdata.db import connect
+    from ffdata.draft import _draft_capital
+    teams = set(_draft_capital(connect())["team"].dropna())
+    assert not (teams & {"GNB", "KAN", "LVR", "NWE", "NOR", "SFO", "TAM"})
+    assert {"GB", "KC", "LV"} & teams

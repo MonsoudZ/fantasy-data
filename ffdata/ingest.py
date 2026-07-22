@@ -34,7 +34,7 @@ UA = {"User-Agent": "ff-data-ingest/0.1"}
 _KEEP_POSITIONS = {"QB", "RB", "WR", "TE", "FB", "K"}
 
 
-def _normalize_weekly(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_weekly(df: pd.DataFrame, season: int | None = None) -> pd.DataFrame:
     """Map nflverse's `stats_player_week` file onto the schema our code expects.
 
     The new asset renamed a couple of columns and now includes every position.
@@ -46,8 +46,21 @@ def _normalize_weekly(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _normalize_depth_charts(df: pd.DataFrame, season: int | None = None) -> pd.DataFrame:
+    """Depth charts changed format mid-stream: older files are season/week rows,
+    newer ones are dated LIVE snapshots with no season column and many snapshots
+    stacked together. Stamp the season we asked for, and for snapshot files keep
+    only the most recent chart (the current depth order)."""
+    df = df.copy()
+    if season is not None and ("season" not in df.columns or df["season"].isna().all()):
+        df["season"] = season
+    if "dt" in df.columns and df["dt"].notna().any():
+        df = df[df["dt"] == df["dt"].max()].reset_index(drop=True)
+    return df
+
+
 # Per-dataset transforms applied after download, before writing parquet.
-NORMALIZERS = {"weekly": _normalize_weekly}
+NORMALIZERS = {"weekly": _normalize_weekly, "depth_charts": _normalize_depth_charts}
 
 
 def current_nfl_season(today: dt.date | None = None) -> int:
@@ -90,7 +103,7 @@ def _download(url: str, retries: int = 3, backoff: float = 2.0) -> bytes:
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
-def _fetch_to_parquet(url: str, dest: Path, normalize=None) -> int:
+def _fetch_to_parquet(url: str, dest: Path, normalize=None, season: int | None = None) -> int:
     """Fetch a remote csv/parquet and store it as parquet. Returns row count."""
     blob = _download(url)
     if url.endswith(".csv"):
@@ -98,7 +111,7 @@ def _fetch_to_parquet(url: str, dest: Path, normalize=None) -> int:
     else:
         df = pd.read_parquet(io.BytesIO(blob))
     if normalize is not None:
-        df = normalize(df)
+        df = normalize(df, season)
     dest.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(dest, index=False)
     return len(df)
@@ -137,7 +150,7 @@ def ingest(
                 log(f"  skip  {dest.relative_to(RAW.parent.parent)} (cached)")
                 continue
             try:
-                rows = _fetch_to_parquet(url, dest, normalize=NORMALIZERS.get(name))
+                rows = _fetch_to_parquet(url, dest, normalize=NORMALIZERS.get(name), season=season)
                 log(f"  ok    {name}{suffix}: {rows:,} rows")
             except Exception as exc:  # noqa: BLE001 - collect and report at the end
                 # `log` may be any callable; don't assume it accepts a `file=`

@@ -116,6 +116,19 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   worse). Expect ~0.57 rank / ~45 pts MAE: rookie values are a **prior, not a
   projection**, and the curve is stepped, so ties are real (broken by pick).
   Degrades to veterans-only if `draft_picks` isn't ingested.
+- **Rookie opportunity is context, not a feature** (`draft.rookie_context`): the
+  drafting team's vacated vs returning production at that position, plus the
+  preseason depth-chart rank (`depth_charts` source). Tested as model features
+  and they made ranking *worse* every year (0.57 → 0.51 raw, 0.54 even with
+  domain-correct monotone constraints). Why: the signals are real but weak
+  (vacated +0.14, returning −0.09 vs **pick +0.62**), teams already draft partly
+  for need (QB +0.31, TE +0.23 corr between vacated share and an earlier pick),
+  and ~350 training rookies can't afford the variance. So it's surfaced for a
+  human to weigh — e.g. 2026: Carnell Tate (pick 4) has 82 vacated / 308
+  returning, while Makai Lemon (pick 20) has 273 vacated.
+- `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
+  rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
+  teams silently lose all team context.
 - **Grounded advice** (`advice.py`, "Explain — why?" buttons on the draft tab's
   compare/keeper/trade results): asks Claude (`claude-opus-4-8`, adaptive thinking)
   to explain a decision, but **grounded** — the system prompt forbids any stat not

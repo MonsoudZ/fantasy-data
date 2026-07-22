@@ -35,6 +35,9 @@ from .gbm import gbm_params
 from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
 
 POSITIONS = ("QB", "RB", "WR", "TE")
+# draft_picks ships PFR team codes; everything else in the lake uses nflverse's.
+_PFR_TEAM = {"GNB": "GB", "KAN": "KC", "LAR": "LA", "LVR": "LV",
+             "NOR": "NO", "NWE": "NE", "SFO": "SF", "TAM": "TB"}
 # Named scoring presets for the CLIs. Any ScoringRules works via the API.
 _RULES = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
 DEFAULT_LEAGUE = {"teams": 12, "budget": 200, "roster_spots": 15,
@@ -244,8 +247,72 @@ def _draft_capital(con) -> pd.DataFrame | None:
         "pick": pd.to_numeric(df.get("pick"), errors="coerce"),
         "position": df.get("position"),
         "player": df[name_col] if name_col else df["gsis_id"],
+        # draft_picks uses PFR team codes (GNB/KAN/LVR); the rest of the lake
+        # uses nflverse ones (GB/KC/LV). Unmapped, 8 teams silently lose context.
+        "team": df.get("team", pd.Series(index=df.index, dtype=object)).replace(_PFR_TEAM),
     }).dropna(subset=["player_id", "draft_season", "pick"])
     return out[out["position"].isin(POSITIONS)].reset_index(drop=True)
+
+
+def rookie_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame | None:
+    """Opportunity context for each incoming rookie -- what he's walking into.
+
+    For the drafting team and position: how much of last season's production
+    LEFT (free agency/trade/retirement) vs stayed (the competition he must beat),
+    plus his spot on the preseason depth chart.
+
+    This is deliberately NOT fed to the projection. Measured on 2022-25, these
+    signals are real but weak (vacated production correlates +0.14 with rookie
+    points, returning competition -0.09) next to draft pick (+0.62) -- and teams
+    already draft partly for need (QB +0.31, TE +0.23), so pick absorbs some of
+    it. Every variant that modeled them ranked WORSE than pick alone (0.54 vs
+    0.57) on ~350 training rows. So it ships as context for a human to weigh,
+    not as a number the model pretends to know.
+    """
+    con = con or connect()
+    caps = _draft_capital(con)
+    if caps is None:
+        return None
+    rooks = caps[caps["draft_season"] == target_season].copy()
+    if rooks.empty:
+        return rooks.assign(vacated_fp=[], returning_fp=[], depth_rank=[])
+
+    agg, ts = _season_agg(con, rules), _team_season(con)
+    prior = (agg[agg["season"] == target_season - 1][["player_id", "position", "fp"]]
+             .merge(ts[ts["season"] == target_season - 1][["player_id", "team"]], on="player_id"))
+    now = ts[ts["season"] == target_season][["player_id", "team"]].rename(columns={"team": "team_now"})
+    prior = prior.merge(now, on="player_id", how="left")
+    prior["stays"] = prior["team_now"] == prior["team"]
+    ctx = (prior.assign(gone=np.where(prior["stays"], 0.0, prior["fp"]),
+                        back=np.where(prior["stays"], prior["fp"], 0.0))
+           .groupby(["team", "position"], as_index=False)
+           .agg(vacated_fp=("gone", "sum"), returning_fp=("back", "sum")))
+
+    out = rooks.merge(ctx, on=["team", "position"], how="left")
+    out[["vacated_fp", "returning_fp"]] = out[["vacated_fp", "returning_fp"]].fillna(0.0).round(1)
+    out["depth_rank"] = out["player_id"].map(_depth_rank(con, target_season))
+    cols = ["player", "position", "team", "pick", "vacated_fp", "returning_fp", "depth_rank"]
+    return out[cols].sort_values("pick").reset_index(drop=True)
+
+
+def _depth_rank(con, season: int) -> dict:
+    """player_id -> depth-chart rank for `season` (1 = starter), if available.
+
+    The source changed format: older seasons carry `depth_team`, newer ones are
+    dated snapshots with `pos_rank`. Take whichever is present.
+    """
+    if not _has_view(con, "depth_charts"):
+        return {}
+    try:
+        df = con.sql(f"select * from depth_charts where season = {int(season)}").df()
+    except Exception:  # noqa: BLE001 - missing/odd schema -> no depth context
+        return {}
+    rank_col = next((c for c in ("pos_rank", "depth_team") if c in df.columns), None)
+    if df.empty or rank_col is None or "gsis_id" not in df.columns:
+        return {}
+    d = df[["gsis_id", rank_col]].dropna()
+    d[rank_col] = pd.to_numeric(d[rank_col], errors="coerce")
+    return d.dropna().groupby("gsis_id")[rank_col].min().to_dict()
 
 
 def _rookie_features(df: pd.DataFrame) -> pd.DataFrame:
