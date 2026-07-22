@@ -8,6 +8,7 @@ nflverse draft_picks lake and `backtest_rookies()`. Runs in CI (no data lake).
 import duckdb
 import pandas as pd
 
+from conftest import requires_data_lake
 from ffdata.draft import _draft_capital, rookie_projection
 from ffdata.scoring import PPR
 
@@ -98,3 +99,18 @@ def test_rookie_projection_leak_free_split_excludes_target_year():
     # in-season result -- if it leaked, proj would ~= its actual 295, but the
     # model is trained only on <2023 rows, so it generalizes from capital.
     assert proj is not None and "r2023" in set(proj["player_id"])
+
+
+@requires_data_lake
+def test_rookie_curve_is_monotone_in_draft_pick():
+    """Against real draft data: the shipped model is a monotone pick curve, so a
+    later pick can never project higher. Guards the overfit multi-feature GBM
+    that ranked worse than sorting by pick (0.510 vs 0.575)."""
+    from ffdata.db import connect
+    con = connect()
+    proj = rookie_projection(2026, con=con)
+    picks = _draft_capital(con)[["player_id", "pick"]]
+    m = proj.merge(picks, on="player_id").sort_values("pick")
+    assert len(m) > 20
+    # Non-increasing in pick (ties allowed -- the curve is stepped).
+    assert (m["proj"].diff().dropna() <= 1e-9).all()

@@ -195,13 +195,28 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> p
 
 
 # --------------------------------------------------------------------------- #
-# Rookies: draft-capital model (returning-player model can't touch them --
-# they have no prior season). SCAFFOLDED but not yet backtested on real data;
-# validate with backtest_rookies() before trusting the magnitudes.
+# Rookies: draft-capital model (the returning-player model can't touch them --
+# they have no prior season).
+#
+# BACKTESTED (2022-25, ~70 rookies/yr). Where a player was drafted is nearly the
+# whole signal: sorting by pick alone ranks at 0.575 Spearman, and the original
+# multi-feature GBM (pick + round + position, 300 trees) managed only 0.510 --
+# it overfit ~350 training rows and wiggled non-monotonically in pick. What ships
+# is a small pick-only curve with a monotone constraint (earlier pick can never
+# project lower): 0.566, i.e. it matches the naive ordering while still emitting
+# POINTS, which VOR and auction $ need. Position is deliberately excluded -- both
+# as GBM features (0.510) and as a post-hoc per-position scale (0.520) it made
+# ranking measurably worse on this sample. Rookie seasons are genuinely noisy:
+# expect ~0.57 rank and ~45 pts MAE, so treat rookie values as a prior, not a
+# projection. Re-check with backtest_rookies().
 # --------------------------------------------------------------------------- #
-_ROOKIE_FEATS = ["pick", "log_pick", "draft_round"] + [f"is_{p}" for p in POSITIONS]
-_ROOKIE_PARAMS = gbm_params(n_estimators=300, num_leaves=16, min_child_samples=15,
-                            subsample=0.9, colsample_bytree=0.9)
+_ROOKIE_FEATS = ["pick", "log_pick"]
+# Capacity above this changes nothing (rank is flat at 0.566 from 4 to 31 leaves);
+# the curve is genuinely step-shaped because ~350 rows only support a few honest
+# splits on pick. Ties are therefore real -- broken by pick, the better signal.
+_ROOKIE_PARAMS = gbm_params(n_estimators=150, num_leaves=8, min_child_samples=15,
+                            subsample=0.9, colsample_bytree=0.9,
+                            monotone_constraints=[-1, -1])  # later pick -> never higher
 
 
 def _has_view(con, name: str) -> bool:
@@ -252,7 +267,9 @@ def rookie_projection(target_season: int, rules: ScoringRules = PPR, con=None) -
     the players drafted INTO `target_season`. Returns None if the `draft_picks`
     source isn't ingested; an empty frame if there are no rookies to project.
 
-    NOTE: scaffolded, not yet validated on real data -- run backtest_rookies().
+    Backtested on 2022-25: ~0.57 rank, ~45 pts MAE -- about what sorting by draft
+    pick achieves, which is the honest ceiling here (see the block comment above).
+    Rookie values are a prior, not a projection.
     """
     con = con or connect()
     caps = _draft_capital(con)
@@ -269,7 +286,10 @@ def rookie_projection(target_season: int, rules: ScoringRules = PPR, con=None) -
         return empty
     model = lgb.LGBMRegressor(**_ROOKIE_PARAMS).fit(train[_ROOKIE_FEATS], train["fp"])
     test["proj"] = np.clip(model.predict(test[_ROOKIE_FEATS]), 0, None).round(1)
-    return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
+    # The curve is stepped, so rookies tie often; break ties by draft pick -- the
+    # strongest signal we have -- rather than leaving the order to sort chance.
+    ordered = test.sort_values(["proj", "pick"], ascending=[False, True])
+    return ordered[["player_id", "player", "position", "proj"]]
 
 
 def backtest_rookies(target_season: int, rules: ScoringRules = PPR, con=None) -> dict | None:

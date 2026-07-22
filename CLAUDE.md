@@ -107,9 +107,15 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   `--scoring ppr|half|standard`; the API takes a `rules=` / `scoring` arg.
 - Rookies: a **draft-capital model** (`draft.rookie_projection`, needs the
   `draft_picks` source) projects rookie-season points from where a player was
-  drafted and folds them into `draft_board` (`include_rookies=True`). ⚠️ Scaffolded
-  but **not yet backtested on real data** — run `draft.backtest_rookies()` before
-  trusting the magnitudes. Degrades to veterans-only if `draft_picks` isn't ingested.
+  drafted and folds them into `draft_board` (`include_rookies=True`).
+  **Backtested (2022-25)**: draft pick is nearly the whole signal — naive pick
+  order ranks 0.575, the original multi-feature GBM only 0.510 (it overfit ~350
+  rows). Ships as a **monotone pick-only curve**: 0.566, matching the naive
+  ordering while still emitting the points VOR/auction need. Position is
+  deliberately excluded (as features 0.510, as a per-position scale 0.520 — both
+  worse). Expect ~0.57 rank / ~45 pts MAE: rookie values are a **prior, not a
+  projection**, and the curve is stepped, so ties are real (broken by pick).
+  Degrades to veterans-only if `draft_picks` isn't ingested.
 - **Grounded advice** (`advice.py`, "Explain — why?" buttons on the draft tab's
   compare/keeper/trade results): asks Claude (`claude-opus-4-8`, adaptive thinking)
   to explain a decision, but **grounded** — the system prompt forbids any stat not
