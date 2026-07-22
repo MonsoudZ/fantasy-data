@@ -18,14 +18,19 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from .draft import DEFAULT_LEAGUE, best_available, draft_board
+from .features import build_features
 from .ingest import current_nfl_season
 from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match
+from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD
 
 _RULES = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
 _SIMS: dict = {}
 _BOARDS: dict = {}
+_DRAFT: dict = {}
+_FEATS: dict = {}
 _STATIC = Path(__file__).parent / "static"
 
 
@@ -150,6 +155,70 @@ def optimize(req: OptRequest):
     return {"ok": True, "mode": req.mode, "headline": headline, "lineup": rows,
             "total": round(sum(r["pred"] for r in rows), 1), "note": note,
             "missing": missing, "pool_size": len(pool)}
+
+
+class DraftRequest(BaseModel):
+    season: int = current_nfl_season()
+    teams: int = 12
+    drafted: list[str] = []
+    position: str | None = None
+    n: int = 50
+
+
+@app.post("/api/draft")
+def api_draft(req: DraftRequest):
+    key = (req.season, req.teams)
+    try:
+        if key not in _DRAFT:
+            _DRAFT[key] = draft_board(req.season, {**DEFAULT_LEAGUE, "teams": req.teams})
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    board = _DRAFT[key]
+    if board.empty:
+        return {"ok": False, "error": f"No draftable data for {req.season}. Ingest it first."}
+    avail = best_available(board, req.drafted, req.position or None, req.n)
+    players = [{"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
+                "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
+               for _, r in avail.iterrows()]
+    return {"ok": True, "count": len(players), "total": len(board), "players": players}
+
+
+class PropsRequest(BaseModel):
+    season: int = current_nfl_season()
+    week: int
+    lines: str = ""
+
+
+def _parse_props(text: str) -> pd.DataFrame:
+    rows = []
+    for i, line in enumerate(text.strip().splitlines()):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+        if i == 0 and parts[1].lower() in ("market", "prop"):
+            continue
+        try:
+            rows.append({"player": parts[0], "market": parts[1], "line": float(parts[2]),
+                         "over_odds": float(parts[3]), "under_odds": float(parts[4])})
+        except ValueError:
+            continue
+    return pd.DataFrame(rows)
+
+
+@app.post("/api/props")
+def api_props(req: PropsRequest):
+    prop_df = _parse_props(req.lines)
+    if prop_df.empty:
+        return {"ok": False, "error": "No valid prop lines. Format: player,market,line,over_odds,under_odds"}
+    try:
+        if req.season not in _FEATS:
+            _FEATS[req.season] = build_features(seasons=list(range(2019, req.season + 1)))
+        edges = price_props(prop_df, req.season, req.week, feats=_FEATS[req.season], threshold=-999)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not price props: {exc}"}
+    return {"ok": True, "priced": len(edges),
+            "edges": edges.to_dict("records"),
+            "markets": sorted({m for m in prop_df["market"].unique()})}
 
 
 def main() -> None:

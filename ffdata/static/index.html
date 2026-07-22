@@ -3,323 +3,339 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ff-data · lineup optimizer</title>
+<title>ff-data · fantasy command center</title>
 <style>
   :root {
-    --bg: #0b1020; --bg2: #121a33; --card: #161f3d; --card2: #1c274d;
-    --line: #2a3763; --text: #e8ecfb; --muted: #93a0c8; --accent: #6366f1;
-    --accent2: #22d3ee; --good: #34d399; --warn: #fbbf24;
-    --qb: #f87171; --rb: #34d399; --wr: #60a5fa; --te: #c084fc; --flex: #94a3b8;
-    --radius: 16px; --shadow: 0 10px 40px rgba(0,0,0,.35);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bg:#0b1020; --bg2:#121a33; --card:#161f3d; --card2:#1c274d; --line:#2a3763;
+    --text:#e8ecfb; --muted:#93a0c8; --accent:#6366f1; --accent2:#22d3ee; --good:#34d399;
+    --warn:#fbbf24; --bad:#f87171;
+    --qb:#f87171; --rb:#34d399; --wr:#60a5fa; --te:#c084fc; --flex:#94a3b8;
+    --radius:16px; --shadow:0 10px 40px rgba(0,0,0,.35);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; color: var(--text); min-height: 100vh;
-    background: radial-gradient(1200px 600px at 80% -10%, #1b2650 0%, transparent 60%),
-                radial-gradient(1000px 500px at -10% 110%, #10233f 0%, transparent 55%),
-                var(--bg);
-  }
-  header {
-    padding: 34px 24px 26px; text-align: center;
-    border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, rgba(99,102,241,.10), transparent);
-  }
-  header h1 {
-    margin: 0; font-size: 30px; letter-spacing: -.5px;
-    background: linear-gradient(90deg, var(--accent2), var(--accent));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  header p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
-  .wrap { max-width: 1080px; margin: 24px auto; padding: 0 20px;
-    display: grid; grid-template-columns: 420px 1fr; gap: 22px; }
-  @media (max-width: 880px) { .wrap { grid-template-columns: 1fr; } }
-  .card {
-    background: linear-gradient(180deg, var(--card), var(--bg2));
-    border: 1px solid var(--line); border-radius: var(--radius);
-    box-shadow: var(--shadow); padding: 22px;
-  }
-  label { display: block; font-size: 12px; font-weight: 600; letter-spacing: .3px;
-    text-transform: uppercase; color: var(--muted); margin: 16px 0 7px; }
-  .row { display: flex; gap: 12px; }
-  input[type=number], textarea, select {
-    width: 100%; background: #0e1530; color: var(--text);
-    border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px;
-    font-size: 15px; font-family: inherit; transition: border-color .15s, box-shadow .15s;
-  }
-  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(99,102,241,.25); }
-  textarea { resize: vertical; min-height: 128px; line-height: 1.55; }
-  .seg { display: flex; background: #0e1530; border: 1px solid var(--line);
-    border-radius: 11px; padding: 4px; gap: 4px; }
-  .seg button { flex: 1; border: 0; background: transparent; color: var(--muted);
-    padding: 9px 6px; border-radius: 8px; font-size: 13px; font-weight: 600;
-    cursor: pointer; transition: all .15s; }
-  .seg button.on { background: linear-gradient(180deg, var(--accent), #4f46e5);
-    color: #fff; box-shadow: 0 4px 14px rgba(79,70,229,.45); }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .chip { float: right; margin-top: -3px; border: 1px solid var(--line); background: #0e1530;
-    color: var(--muted); font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
-    cursor: pointer; text-transform: none; letter-spacing: 0; transition: all .15s; }
-  .chip.on { background: linear-gradient(90deg, var(--accent), var(--accent2)); color: #fff; border-color: transparent; }
-  .search { position: relative; margin-bottom: 8px; }
-  #presults { position: absolute; z-index: 20; left: 0; right: 0; top: 46px;
-    background: #0e1530; border: 1px solid var(--line); border-radius: 11px; overflow: hidden;
-    box-shadow: var(--shadow); display: none; max-height: 260px; overflow-y: auto; }
-  #presults.show { display: block; }
-  .pr { display: grid; grid-template-columns: 34px 1fr auto auto; align-items: center; gap: 10px;
-    padding: 9px 12px; cursor: pointer; border-bottom: 1px solid rgba(42,55,99,.5); }
-  .pr:hover { background: var(--card2); }
-  .pr .pos { font-size: 10px; padding: 3px 0; }
-  .pr .nm { font-size: 14px; font-weight: 600; }
-  .pr .tm { font-size: 11px; color: var(--muted); }
-  .pr .pd { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; }
-  .slate-on #roster, .slate-on .search { opacity: .4; pointer-events: none; }
-  #advanced { display: none; }
-  .slider-row { display: flex; align-items: center; gap: 12px; }
-  input[type=range] { flex: 1; accent-color: var(--accent); }
-  .go {
-    width: 100%; margin-top: 22px; border: 0; cursor: pointer; color: #fff;
-    padding: 15px; font-size: 16px; font-weight: 700; border-radius: 13px;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    box-shadow: 0 10px 30px rgba(34,211,238,.25); transition: transform .1s, filter .15s;
-  }
-  .go:hover { filter: brightness(1.06); } .go:active { transform: translateY(1px); }
-  .go:disabled { filter: grayscale(.5) brightness(.8); cursor: default; }
-
-  /* results */
-  #results { min-height: 320px; display: flex; flex-direction: column; }
-  .empty { margin: auto; text-align: center; color: var(--muted); }
-  .empty .big { font-size: 44px; margin-bottom: 8px; }
-  .headline { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
-    border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 8px; }
-  .headline .val { font-size: 42px; font-weight: 800; letter-spacing: -1px;
-    background: linear-gradient(90deg, var(--good), var(--accent2));
-    -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .headline .lab { font-size: 13px; text-transform: uppercase; letter-spacing: .4px;
-    color: var(--muted); font-weight: 700; }
-  .headline .sub { color: var(--muted); font-size: 13px; margin-left: auto; }
-  .lineup { list-style: none; margin: 8px 0 0; padding: 0; }
-  .lineup li { display: grid; grid-template-columns: 52px 40px 1fr auto auto;
-    align-items: center; gap: 12px; padding: 12px 6px; border-bottom: 1px solid rgba(42,55,99,.5); }
-  .slot { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: .5px; }
-  .pos { font-size: 11px; font-weight: 800; text-align: center; padding: 4px 0;
-    border-radius: 7px; color: #08122a; }
-  .pos.QB{background:var(--qb)} .pos.RB{background:var(--rb)} .pos.WR{background:var(--wr)}
-  .pos.TE{background:var(--te)}
-  .pname { font-weight: 650; font-size: 15px; }
-  .team { font-size: 11px; font-weight: 700; color: var(--muted);
-    background: #0e1530; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
-  .pred { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 16px; min-width: 48px; text-align: right; }
-  .total { display: flex; justify-content: space-between; align-items: center;
-    margin-top: 14px; padding-top: 14px; border-top: 2px solid var(--line); font-weight: 800; }
-  .total .n { font-size: 22px; }
-  .note { margin-top: 14px; color: var(--muted); font-size: 13px; }
-  .warn { margin-top: 12px; background: rgba(251,191,36,.10); border: 1px solid rgba(251,191,36,.35);
-    color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
-  .err { color: #fca5a5; background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.35);
-    border-radius: 12px; padding: 16px; font-size: 14px; }
-  .spinner { margin: auto; text-align: center; color: var(--muted); }
-  .ring { width: 46px; height: 46px; border-radius: 50%; margin: 0 auto 14px;
-    border: 4px solid var(--line); border-top-color: var(--accent2); animation: spin 1s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  * { box-sizing:border-box; }
+  body { margin:0; color:var(--text); min-height:100vh;
+    background:radial-gradient(1200px 600px at 80% -10%,#1b2650 0,transparent 60%),
+               radial-gradient(1000px 500px at -10% 110%,#10233f 0,transparent 55%),var(--bg); }
+  header { padding:26px 20px 0; text-align:center; }
+  header h1 { margin:0; font-size:26px; letter-spacing:-.5px;
+    background:linear-gradient(90deg,var(--accent2),var(--accent));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  header p { margin:6px 0 18px; color:var(--muted); font-size:13px; }
+  .tabs { display:flex; gap:6px; justify-content:center; flex-wrap:wrap;
+    border-bottom:1px solid var(--line); padding:0 12px; }
+  .tab { border:0; background:transparent; color:var(--muted); font-size:15px; font-weight:700;
+    padding:12px 22px; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; }
+  .tab.on { color:var(--text); border-bottom-color:var(--accent2); }
+  .wrap { max-width:1080px; margin:22px auto; padding:0 18px; }
+  .panel { display:none; } .panel.on { display:block; }
+  .grid { display:grid; grid-template-columns:400px 1fr; gap:20px; }
+  @media (max-width:860px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:linear-gradient(180deg,var(--card),var(--bg2)); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; }
+  label { display:block; font-size:12px; font-weight:600; letter-spacing:.3px; text-transform:uppercase;
+    color:var(--muted); margin:15px 0 7px; }
+  label:first-child { margin-top:0; }
+  .row { display:flex; gap:12px; }
+  input[type=number], input[type=text], textarea, select {
+    width:100%; background:#0e1530; color:var(--text); border:1px solid var(--line);
+    border-radius:11px; padding:11px 13px; font-size:15px; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(99,102,241,.25); }
+  textarea { resize:vertical; min-height:120px; line-height:1.5; font-family:ui-monospace,monospace; font-size:13px; }
+  .seg { display:flex; background:#0e1530; border:1px solid var(--line); border-radius:11px; padding:4px; gap:4px; }
+  .seg button { flex:1; border:0; background:transparent; color:var(--muted); padding:9px 6px;
+    border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
+  .seg button.on { background:linear-gradient(180deg,var(--accent),#4f46e5); color:#fff;
+    box-shadow:0 4px 14px rgba(79,70,229,.45); }
+  .go { width:100%; margin-top:18px; border:0; cursor:pointer; color:#fff; padding:14px; font-size:16px;
+    font-weight:700; border-radius:13px; background:linear-gradient(90deg,var(--accent),var(--accent2));
+    box-shadow:0 10px 30px rgba(34,211,238,.25); transition:filter .15s; }
+  .go:hover{ filter:brightness(1.06); } .go:disabled{ filter:grayscale(.5) brightness(.8); cursor:default; }
+  .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+  .chip-btn { float:right; margin-top:-3px; border:1px solid var(--line); background:#0e1530; color:var(--muted);
+    font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; cursor:pointer; text-transform:none; }
+  .chip-btn.on { background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#fff; border-color:transparent; }
+  /* position badge */
+  .pos { font-size:11px; font-weight:800; text-align:center; padding:4px 0; width:34px; border-radius:7px; color:#08122a; display:inline-block; }
+  .pos.QB{background:var(--qb)} .pos.RB{background:var(--rb)} .pos.WR{background:var(--wr)} .pos.TE{background:var(--te)}
+  /* roster builder */
+  .pgroup { margin-bottom:12px; }
+  .pgtop { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:var(--card2); border:1px solid var(--line);
+    border-radius:8px; padding:5px 8px; font-size:13px; font-weight:600; }
+  .chip b { color:var(--muted); font-weight:800; font-size:10px; }
+  .chip .x { cursor:pointer; color:var(--muted); font-weight:800; }
+  .search { position:relative; }
+  .results { position:absolute; z-index:30; left:0; right:0; top:44px; background:#0e1530; border:1px solid var(--line);
+    border-radius:11px; overflow:hidden; box-shadow:var(--shadow); display:none; max-height:240px; overflow-y:auto; }
+  .results.show { display:block; }
+  .pr { display:grid; grid-template-columns:38px 1fr auto auto; align-items:center; gap:10px; padding:9px 12px;
+    cursor:pointer; border-bottom:1px solid rgba(42,55,99,.5); }
+  .pr:hover{ background:var(--card2); } .pr .nm{ font-size:14px; font-weight:600; } .pr .tm{ font-size:11px; color:var(--muted); }
+  .pr .pd{ font-variant-numeric:tabular-nums; font-weight:700; font-size:13px; }
+  /* results / tables */
+  .headline { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; border-bottom:1px solid var(--line);
+    padding-bottom:14px; margin-bottom:8px; }
+  .headline .val { font-size:40px; font-weight:800; letter-spacing:-1px;
+    background:linear-gradient(90deg,var(--good),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .headline .lab { font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); font-weight:700; }
+  .headline .sub { color:var(--muted); font-size:13px; margin-left:auto; }
+  .lineup { list-style:none; margin:8px 0 0; padding:0; }
+  .lineup li { display:grid; grid-template-columns:52px 40px 1fr auto auto; align-items:center; gap:12px;
+    padding:11px 6px; border-bottom:1px solid rgba(42,55,99,.5); }
+  .slot { font-size:11px; font-weight:800; color:var(--muted); }
+  .pname { font-weight:650; font-size:15px; } .team { font-size:11px; font-weight:700; color:var(--muted);
+    background:#0e1530; border:1px solid var(--line); border-radius:6px; padding:3px 8px; }
+  .pred { font-variant-numeric:tabular-nums; font-weight:800; font-size:16px; min-width:48px; text-align:right; }
+  .total { display:flex; justify-content:space-between; margin-top:14px; padding-top:14px; border-top:2px solid var(--line); font-weight:800; }
+  .note { margin-top:12px; color:var(--muted); font-size:13px; }
+  .warn { margin-top:10px; background:rgba(251,191,36,.10); border:1px solid rgba(251,191,36,.35); color:var(--warn);
+    border-radius:10px; padding:9px 12px; font-size:13px; }
+  .err { color:#fca5a5; background:rgba(248,113,113,.10); border:1px solid rgba(248,113,113,.35);
+    border-radius:12px; padding:16px; font-size:14px; }
+  .empty { text-align:center; color:var(--muted); padding:60px 20px; }
+  .empty .big { font-size:40px; margin-bottom:8px; }
+  .spinner { text-align:center; color:var(--muted); padding:50px 20px; }
+  .ring { width:44px; height:44px; border-radius:50%; margin:0 auto 14px; border:4px solid var(--line);
+    border-top-color:var(--accent2); animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted);
+    padding:8px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--card); }
+  td { padding:9px 10px; border-bottom:1px solid rgba(42,55,99,.4); }
+  td.num { font-variant-numeric:tabular-nums; font-weight:700; text-align:right; }
+  tr.pos-row:hover { background:var(--card2); }
+  .draftbtn { border:1px solid var(--line); background:#0e1530; color:var(--accent2); font-weight:700;
+    font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer; }
+  .draftbtn:hover { background:var(--accent); color:#fff; border-color:transparent; }
+  .filterbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  .fchip { border:1px solid var(--line); background:#0e1530; color:var(--muted); font-size:12px; font-weight:700;
+    padding:6px 12px; border-radius:999px; cursor:pointer; }
+  .fchip.on { background:var(--accent); color:#fff; border-color:transparent; }
+  .drafted { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; max-height:120px; overflow-y:auto; }
+  .scroll { max-height:560px; overflow-y:auto; }
+  .ev-pos { color:var(--good); font-weight:800; } .ev-neg { color:var(--muted); }
 </style>
 </head>
 <body>
   <header>
     <h1>ff-data</h1>
-    <p>Enter your roster — get the lineup that actually wins, not just the one with the most points.</p>
+    <p>Your fantasy command center — lineups, drafts, and prop edges from one model.</p>
+    <div class="tabs">
+      <button class="tab on" data-tab="lineup">Lineup</button>
+      <button class="tab" data-tab="draft">Draft board</button>
+      <button class="tab" data-tab="props">Prop edges</button>
+    </div>
   </header>
 
   <div class="wrap">
-    <!-- form -->
-    <form class="card" id="form" onsubmit="return false;">
-      <div class="row">
-        <div style="flex:1"><label>Week</label><input type="number" id="week" min="1" max="22" value="15" /></div>
-        <div style="flex:1"><label>Season</label><input type="number" id="season" value="2024" /></div>
-      </div>
+    <!-- ============ LINEUP ============ -->
+    <div class="panel on" id="p-lineup">
+      <div class="grid">
+        <div class="card">
+          <div class="row">
+            <div style="flex:1"><label>Week</label><input type="number" id="l-week" min="1" max="22" value="15" /></div>
+            <div style="flex:1"><label>Season</label><input type="number" id="l-season" value="2024" /></div>
+          </div>
+          <label>Scoring</label>
+          <div class="seg" id="l-scoring">
+            <button data-v="ppr" class="on">PPR</button><button data-v="half">Half</button><button data-v="standard">Standard</button>
+          </div>
+          <label>Mode</label>
+          <div class="seg" id="l-mode">
+            <button data-v="h2h" class="on">Head-to-head</button><button data-v="tournament">Tournament</button><button data-v="stack">Stack</button>
+          </div>
 
-      <label>Scoring</label>
-      <div class="seg" id="scoring">
-        <button data-v="ppr" class="on">PPR</button>
-        <button data-v="half">Half-PPR</button>
-        <button data-v="standard">Standard</button>
-      </div>
+          <label>Your roster
+            <button type="button" id="l-slate" class="chip-btn">⚡ Full slate</button>
+          </label>
+          <div id="roster-builder"></div>
+          <div class="hint" id="l-rhint">Search each position to add players. The optimizer picks your best starters.</div>
 
-      <label>Mode</label>
-      <div class="seg" id="mode">
-        <button data-v="h2h" class="on">Head-to-head</button>
-        <button data-v="tournament">Tournament</button>
-        <button data-v="stack">Stack</button>
-      </div>
-      <div class="hint" id="modeHint">Beat one opponent — balances floor and ceiling.</div>
+          <div id="l-oppwrap">
+            <label>Opponent's players <span style="text-transform:none;color:var(--muted)">(optional)</span></label>
+            <div class="search"><input type="text" id="opp-search" placeholder="🔍 add opponent players…" autocomplete="off" /><div class="results" id="opp-res"></div></div>
+            <div class="chips" id="opp-chips"></div>
+          </div>
 
-      <label>Your available players
-        <button type="button" id="slateBtn" class="chip">⚡ Full slate (DFS)</button>
-      </label>
-      <div class="search">
-        <input type="text" id="psearch" autocomplete="off" placeholder="🔍 Search 300+ players to add…" />
-        <div id="presults"></div>
+          <label>Projection model</label>
+          <select id="l-proj"><option value="gbm">Fast (gradient boosting)</option><option value="neural">Most accurate (neural)</option></select>
+          <button class="go" id="l-go">Optimize my lineup</button>
+        </div>
+        <div class="card" id="l-out"><div class="empty"><div class="big">🏈</div>Build your roster and hit Optimize.<div class="hint" style="margin-top:8px">First run trains the model (~2 min).</div></div></div>
       </div>
-      <textarea id="roster" placeholder="One name per line, e.g.&#10;Josh Allen&#10;Saquon Barkley&#10;Ja'Marr Chase&#10;Amon-Ra St. Brown&#10;Trey McBride"></textarea>
-      <div class="hint" id="rosterHint">Search above to add players, or paste your whole roster.</div>
+    </div>
 
-      <div id="oppWrap">
-        <label>Opponent's players <span style="text-transform:none;color:var(--muted)">(optional)</span></label>
-        <textarea id="opponent" placeholder="Their roster, one name per line — enables win-probability optimization"></textarea>
-      </div>
-
-      <div id="advanced">
-        <label>Ceiling target <span id="ceilVal" style="color:var(--accent2)">90th pct</span></label>
-        <div class="slider-row"><input type="range" id="ceiling" min="80" max="99" value="90" /></div>
-        <div class="row" id="stackOpts">
-          <div style="flex:1"><label>Stack size</label><input type="number" id="stackSize" min="1" max="4" value="2" /></div>
-          <div style="flex:1"><label>Bring-back</label><input type="number" id="bringback" min="0" max="2" value="1" /></div>
+    <!-- ============ DRAFT ============ -->
+    <div class="panel" id="p-draft">
+      <div class="grid">
+        <div class="card">
+          <div class="row">
+            <div style="flex:1"><label>Season</label><input type="number" id="d-season" value="2024" /></div>
+            <div style="flex:1"><label>Teams</label><input type="number" id="d-teams" value="12" min="4" max="16" /></div>
+          </div>
+          <button class="go" id="d-go">Load draft board</button>
+          <div class="hint">PPR values. First load trains the season model (~20 s).</div>
+          <label>Drafted <span id="d-count" style="text-transform:none;color:var(--muted)"></span></label>
+          <div class="drafted" id="d-drafted"><span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span></div>
+        </div>
+        <div class="card">
+          <div class="filterbar" id="d-filters"></div>
+          <div class="search" style="margin-bottom:12px"><input type="text" id="d-search" placeholder="🔍 filter players…" autocomplete="off" /></div>
+          <div class="scroll" id="d-board"><div class="empty">Load the board to see VOR-ranked best-available.</div></div>
         </div>
       </div>
+    </div>
 
-      <label>Projection model</label>
-      <select id="projector">
-        <option value="gbm">Fast (gradient boosting)</option>
-        <option value="neural">Most accurate (neural — slower)</option>
-      </select>
-
-      <button class="go" id="go">Optimize my lineup</button>
-    </form>
-
-    <!-- results -->
-    <div class="card" id="results">
-      <div class="empty" id="empty">
-        <div class="big">🏈</div>
-        <div>Fill in your roster and hit <b>Optimize</b>.</div>
-        <div style="margin-top:8px;font-size:13px">First run trains the model (~2 min); after that it's instant.</div>
+    <!-- ============ PROPS ============ -->
+    <div class="panel" id="p-props">
+      <div class="grid">
+        <div class="card">
+          <div class="row">
+            <div style="flex:1"><label>Week</label><input type="number" id="pr-week" min="1" max="22" value="15" /></div>
+            <div style="flex:1"><label>Season</label><input type="number" id="pr-season" value="2024" /></div>
+          </div>
+          <label>Prop lines <button type="button" id="pr-sample" class="chip-btn">load sample</button></label>
+          <textarea id="pr-lines" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105&#10;Josh Allen,passing_yards,244.5,-110,-110"></textarea>
+          <div class="hint">Markets: passing_yards · passing_tds · receiving_yards · receptions · rushing_yards. You bring the odds.</div>
+          <button class="go" id="pr-go">Find +EV edges</button>
+        </div>
+        <div class="card" id="pr-out"><div class="empty"><div class="big">📈</div>Paste prop lines and find your edges.<div class="hint" style="margin-top:8px">First run trains per-stat models (~2 min).</div></div></div>
       </div>
     </div>
   </div>
 
 <script>
-  const $ = s => document.querySelector(s);
-  const state = { scoring: "ppr", mode: "h2h" };
+const $ = s => document.querySelector(s);
+const norm = s => s.toLowerCase().replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g,"").replace(/[^a-z ]/g,"").replace(/\s+/g," ").trim();
 
-  function seg(id, key, onchange) {
-    document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
-      document.querySelectorAll(`#${id} button`).forEach(x => x.classList.remove("on"));
-      b.classList.add("on"); state[key] = b.dataset.v; onchange && onchange();
-    });
-  }
-  const HINTS = {
-    h2h: "Beat one opponent — balances floor and ceiling.",
-    tournament: "Large field — maximize your ceiling (upside), the top-score game.",
-    stack: "Build the best lineup around a QB game stack (QB + receivers + bring-back)."
-  };
-  function syncMode() {
-    $("#modeHint").textContent = HINTS[state.mode];
-    $("#oppWrap").style.display = state.mode === "h2h" ? "block" : "none";
-    $("#advanced").style.display = state.mode === "h2h" ? "none" : "block";
-    $("#stackOpts").style.display = state.mode === "stack" ? "flex" : "none";
-  }
-  seg("scoring", "scoring");
-  seg("mode", "mode", syncMode);
-  syncMode();
-  $("#ceiling").oninput = e => $("#ceilVal").textContent = e.target.value + "th pct";
+/* ---- tabs ---- */
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on")); t.classList.add("on");
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("on"));
+  $("#p-"+t.dataset.tab).classList.add("on");
+});
+function seg(id, cb){ document.querySelectorAll(`#${id} button`).forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.remove("on")); b.classList.add("on"); cb&&cb(b.dataset.v); }); }
 
-  fetch("/api/config").then(r => r.json()).then(c => { if (c.season) $("#season").value = c.season; }).catch(()=>{});
+fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season"].forEach(i=>$("#"+i).value=c.season); } }).catch(()=>{});
 
-  // Full-slate (DFS) toggle
-  state.full_slate = false;
-  $("#slateBtn").onclick = () => {
-    state.full_slate = !state.full_slate;
-    $("#slateBtn").classList.toggle("on", state.full_slate);
-    $("#form").classList.toggle("slate-on", state.full_slate);
-    $("#rosterHint").textContent = state.full_slate
-      ? "Optimizing over every projectable player on the slate (300+)."
-      : "Search above to add players, or paste your whole roster.";
-  };
+/* ============ LINEUP ============ */
+const L = { scoring:"ppr", mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
+seg("l-scoring", v=>{ L.scoring=v; PLAYERS=null; });
+const HINTS={ h2h:"Beat one opponent — balances floor and ceiling.", tournament:"Large field — maximize ceiling.", stack:"Best lineup around a QB game stack." };
+seg("l-mode", v=>{ L.mode=v; $("#l-oppwrap").style.display=v==="h2h"?"block":"none"; });
+$("#l-slate").onclick=()=>{ L.full=!L.full; $("#l-slate").classList.toggle("on",L.full);
+  $("#roster-builder").style.opacity=L.full?.4:1; $("#roster-builder").style.pointerEvents=L.full?"none":"auto";
+  $("#l-rhint").textContent=L.full?"Optimizing over every player on the slate (300+).":"Search each position to add players."; };
 
-  // Player search / add — loads the full board lazily and filters it
-  let PLAYERS = null, loadingKey = null;
-  function base() { return { season:+$("#season").value, week:+$("#week").value,
-    scoring: state.scoring, projector: $("#projector").value }; }
-  async function loadPlayers() {
-    const key = JSON.stringify(base());
-    if (PLAYERS && loadingKey === key) return PLAYERS;
-    $("#presults").innerHTML = `<div class="pr"><span></span><span class="nm">Loading players… (first run trains the model)</span><span></span><span></span></div>`;
-    $("#presults").classList.add("show");
-    const r = await fetch("/api/players", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(base()) });
-    const d = await r.json();
-    PLAYERS = d.ok ? d.players : []; loadingKey = key;
-    return PLAYERS;
-  }
-  $("#psearch").oninput = async () => {
-    const q = $("#psearch").value.trim().toLowerCase();
-    if (!q) { $("#presults").classList.remove("show"); return; }
-    const list = await loadPlayers();
-    const norm = s => s.toLowerCase().replace(/[^a-z ]/g,"");
-    const hits = list.filter(p => norm(p.name).includes(norm(q))).slice(0, 8);
-    $("#presults").innerHTML = hits.length ? hits.map(p => `
-      <div class="pr" data-n="${p.name.replace(/"/g,'&quot;')}">
-        <span class="pos ${p.position}">${p.position}</span>
-        <span class="nm">${p.name}</span><span class="tm">${p.team}</span><span class="pd">${p.pred.toFixed(1)}</span>
-      </div>`).join("") : `<div class="pr"><span></span><span class="nm">No match</span><span></span><span></span></div>`;
-    $("#presults").classList.add("show");
-    document.querySelectorAll("#presults .pr[data-n]").forEach(el => el.onclick = () => {
-      const t = $("#roster"); t.value = (t.value.trim() ? t.value.trim() + "\n" : "") + el.dataset.n;
-      $("#psearch").value = ""; $("#presults").classList.remove("show"); $("#psearch").focus();
-    });
-  };
-  document.addEventListener("click", e => { if (!e.target.closest(".search")) $("#presults").classList.remove("show"); });
-
-  const posOrder = { QB:0, RB:1, WR:2, TE:3, FLEX:4 };
-  function render(d) {
-    const R = $("#results");
-    if (!d.ok) {
-      R.innerHTML = `<div class="err"><b>Couldn't optimize.</b><br>${d.error || "Unknown error"}${
-        d.missing && d.missing.length ? "<br><br>Unmatched: " + d.missing.join(", ") : ""}</div>`;
-      return;
-    }
-    const rows = d.lineup.map(p => `
-      <li>
-        <span class="slot">${p.slot}</span>
-        <span class="pos ${p.position}">${p.position}</span>
-        <span class="pname">${p.name}</span>
-        <span class="team">${p.team}</span>
-        <span class="pred">${p.pred.toFixed(1)}</span>
-      </li>`).join("");
-    const warn = d.missing && d.missing.length
-      ? `<div class="warn">No projection found for: ${d.missing.join(", ")}</div>` : "";
-    R.innerHTML = `
-      <div class="headline">
-        <div><div class="lab">${d.headline.label}</div><div class="val">${d.headline.value}</div></div>
-        <div class="sub">${d.headline.sub || ""}</div>
+let PLAYERS=null, ploadKey=null;
+async function players(){
+  const key = $("#l-season").value+"|"+$("#l-week").value+"|"+L.scoring+"|"+$("#l-proj").value;
+  if(PLAYERS && ploadKey===key) return PLAYERS;
+  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, projector:$("#l-proj").value };
+  const r=await fetch("/api/players",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json(); PLAYERS=d.ok?d.players:[]; ploadKey=key; return PLAYERS;
+}
+function renderRoster(){
+  $("#roster-builder").innerHTML = ["QB","RB","WR","TE"].map(pos=>`
+    <div class="pgroup">
+      <div class="pgtop"><span class="pos ${pos}">${pos}</span>
+        <div class="search" style="flex:1"><input type="text" data-pos="${pos}" class="rsearch" placeholder="+ add ${pos}" autocomplete="off"><div class="results" id="rr-${pos}"></div></div>
       </div>
-      <ul class="lineup">${rows}</ul>
-      <div class="total"><span>Projected total</span><span class="n">${d.total.toFixed(1)}</span></div>
-      <div class="note">${d.note || ""}${d.pool_size ? ` · chose from ${d.pool_size} players` : ""}</div>${warn}`;
-  }
+      <div class="chips" id="rc-${pos}">${L.roster[pos].map(n=>`<span class="chip">${n}<span class="x" data-pos="${pos}" data-n="${n}">✕</span></span>`).join("")}</div>
+    </div>`).join("");
+  document.querySelectorAll("#roster-builder .x").forEach(x=>x.onclick=()=>{ L.roster[x.dataset.pos]=L.roster[x.dataset.pos].filter(n=>n!==x.dataset.n); renderRoster(); });
+  document.querySelectorAll(".rsearch").forEach(inp=>inp.oninput=()=>pickerSearch(inp, inp.dataset.pos, "rr-"+inp.dataset.pos));
+}
+async function pickerSearch(inp, posFilter, resId){
+  const q=inp.value.trim(); const box=$("#"+resId); if(!q){box.classList.remove("show");return;}
+  box.innerHTML=`<div class="pr"><span></span><span class="nm">Loading…</span><span></span><span></span></div>`; box.classList.add("show");
+  const list=(await players()).filter(p=>(!posFilter||p.position===posFilter)&&norm(p.name).includes(norm(q))).slice(0,8);
+  box.innerHTML = list.length? list.map(p=>`<div class="pr" data-n="${p.name.replace(/"/g,'&quot;')}"><span class="pos ${p.position}">${p.position}</span><span class="nm">${p.name}</span><span class="tm">${p.team}</span><span class="pd">${p.pred.toFixed(1)}</span></div>`).join("") : `<div class="pr"><span></span><span class="nm">No match</span><span></span><span></span></div>`;
+  box.classList.add("show");
+  box.querySelectorAll(".pr[data-n]").forEach(el=>el.onclick=()=>{
+    if(posFilter){ if(!L.roster[posFilter].includes(el.dataset.n)) L.roster[posFilter].push(el.dataset.n); renderRoster(); }
+    else { if(!L.opp.includes(el.dataset.n)) L.opp.push(el.dataset.n); renderOpp(); }
+    inp.value=""; box.classList.remove("show"); });
+}
+function renderOpp(){ $("#opp-chips").innerHTML=L.opp.map(n=>`<span class="chip">${n}<span class="x" data-n="${n}">✕</span></span>`).join("");
+  document.querySelectorAll("#opp-chips .x").forEach(x=>x.onclick=()=>{ L.opp=L.opp.filter(n=>n!==x.dataset.n); renderOpp(); }); }
+$("#opp-search").oninput=()=>pickerSearch($("#opp-search"), null, "opp-res");
+renderRoster();
+document.addEventListener("click",e=>{ if(!e.target.closest(".search")) document.querySelectorAll(".results").forEach(r=>r.classList.remove("show")); });
 
-  $("#go").onclick = async () => {
-    const roster = $("#roster").value.trim();
-    if (!roster && !state.full_slate) { $("#roster").focus(); return; }
-    const btn = $("#go"); btn.disabled = true; btn.textContent = "Optimizing…";
-    $("#results").innerHTML = `<div class="spinner"><div class="ring"></div>
-      Projecting week ${$("#week").value} and optimizing…<br>
-      <span style="font-size:13px">First run for a scoring type trains the model (~2 min).</span></div>`;
-    const body = {
-      season: +$("#season").value, week: +$("#week").value,
-      scoring: state.scoring, projector: $("#projector").value, mode: state.mode,
-      roster, opponent: $("#opponent").value, full_slate: state.full_slate,
-      ceiling: (+$("#ceiling").value) / 100,
-      stack_size: +$("#stackSize").value, bringback: +$("#bringback").value
-    };
-    try {
-      const res = await fetch("/api/optimize", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      render(await res.json());
-    } catch (e) {
-      $("#results").innerHTML = `<div class="err">Request failed: ${e}</div>`;
-    }
-    btn.disabled = false; btn.textContent = "Optimize my lineup";
-  };
+$("#l-go").onclick=async()=>{
+  const roster=["QB","RB","WR","TE"].flatMap(p=>L.roster[p]).join("\n");
+  if(!roster && !L.full){ alert("Add some players to your roster first."); return; }
+  const btn=$("#l-go"); btn.disabled=true; btn.textContent="Optimizing…";
+  $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting & optimizing…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
+  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, projector:$("#l-proj").value,
+    mode:L.mode, roster, opponent:L.opp.join("\n"), full_slate:L.full, ceiling:0.9, stack_size:2, bringback:1 };
+  try{ const d=await (await fetch("/api/optimize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderLineup(d); }
+  catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
+  btn.disabled=false; btn.textContent="Optimize my lineup";
+};
+function renderLineup(d){
+  const R=$("#l-out");
+  if(!d.ok){ R.innerHTML=`<div class="err"><b>Couldn't optimize.</b><br>${d.error||""}${d.missing&&d.missing.length?"<br><br>Unmatched: "+d.missing.join(", "):""}</div>`; return; }
+  const rows=d.lineup.map(p=>`<li><span class="slot">${p.slot}</span><span class="pos ${p.position}">${p.position}</span><span class="pname">${p.name}</span><span class="team">${p.team}</span><span class="pred">${p.pred.toFixed(1)}</span></li>`).join("");
+  R.innerHTML=`<div class="headline"><div><div class="lab">${d.headline.label}</div><div class="val">${d.headline.value}</div></div><div class="sub">${d.headline.sub||""}</div></div>
+    <ul class="lineup">${rows}</ul><div class="total"><span>Projected total</span><span>${d.total.toFixed(1)}</span></div>
+    <div class="note">${d.note||""}${d.pool_size?` · chose from ${d.pool_size} players`:""}</div>
+    ${d.missing&&d.missing.length?`<div class="warn">No projection for: ${d.missing.join(", ")}</div>`:""}`;
+}
+
+/* ============ DRAFT ============ */
+const D = { board:[], drafted:new Set(), pos:"ALL", q:"" };
+$("#d-go").onclick=async()=>{
+  const btn=$("#d-go"); btn.disabled=true; btn.textContent="Loading…";
+  $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>Training season model…</div>`;
+  try{
+    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,n:300})})).json();
+    if(!d.ok){ $("#d-board").innerHTML=`<div class="err">${d.error}</div>`; }
+    else { D.board=d.players; renderFilters(); renderBoard(); }
+  }catch(e){ $("#d-board").innerHTML=`<div class="err">${e}</div>`; }
+  btn.disabled=false; btn.textContent="Reload draft board";
+};
+function renderFilters(){ $("#d-filters").innerHTML=["ALL","QB","RB","WR","TE"].map(p=>`<button class="fchip ${p===D.pos?'on':''}" data-p="${p}">${p}</button>`).join("");
+  document.querySelectorAll("#d-filters .fchip").forEach(b=>b.onclick=()=>{ D.pos=b.dataset.p; renderFilters(); renderBoard(); }); }
+$("#d-search").oninput=e=>{ D.q=e.target.value.trim(); renderBoard(); };
+function renderBoard(){
+  const rows=D.board.filter(p=>!D.drafted.has(norm(p.player)) && (D.pos==="ALL"||p.position===D.pos) && (!D.q||norm(p.player).includes(norm(D.q)))).slice(0,120);
+  $("#d-board").innerHTML=`<table><thead><tr><th>#</th><th>Player</th><th></th><th class="num">Proj</th><th class="num">VOR</th><th class="num">$</th><th></th></tr></thead><tbody>${
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}</td><td><span class="pos ${p.position}">${p.position}</span></td><td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td><td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`).join("")}</tbody></table>`;
+  document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
+}
+function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
+  $("#d-drafted").innerHTML = arr.length? arr.map(k=>`<span class="chip">${(D._names&&D._names[k])||k}<span class="x" data-k="${k}">✕</span></span>`).join("") : `<span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span>`;
+  document.querySelectorAll("#d-drafted .x").forEach(x=>x.onclick=()=>{ D.drafted.delete(x.dataset.k); renderBoard(); renderDrafted(); }); }
+
+/* ============ PROPS ============ */
+$("#pr-sample").onclick=()=>{ $("#pr-lines").value=`player,market,line,over_odds,under_odds
+Ja'Marr Chase,receiving_yards,89.5,-115,-105
+Amon-Ra St. Brown,receptions,6.5,-130,110
+Saquon Barkley,rushing_yards,99.5,-110,-110
+Josh Allen,passing_yards,244.5,-112,-108`; };
+$("#pr-go").onclick=async()=>{
+  const lines=$("#pr-lines").value.trim(); if(!lines){ $("#pr-lines").focus(); return; }
+  const btn=$("#pr-go"); btn.disabled=true; btn.textContent="Pricing…";
+  $("#pr-out").innerHTML=`<div class="spinner"><div class="ring"></div>Pricing props…<br><span class="hint">First run trains per-stat models (~2 min).</span></div>`;
+  try{ const d=await (await fetch("/api/props",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#pr-season").value,week:+$("#pr-week").value,lines})})).json(); renderProps(d); }
+  catch(e){ $("#pr-out").innerHTML=`<div class="err">${e}</div>`; }
+  btn.disabled=false; btn.textContent="Find +EV edges";
+};
+function renderProps(d){
+  const R=$("#pr-out");
+  if(!d.ok){ R.innerHTML=`<div class="err">${d.error}</div>`; return; }
+  if(!d.edges.length){ R.innerHTML=`<div class="empty">No props could be priced (player names not found?).</div>`; return; }
+  const rows=d.edges.map(e=>`<tr class="pos-row"><td class="pname">${e.player}</td><td style="color:var(--muted)">${e.market.replace(/_/g," ")}</td><td class="num">${e.line}</td><td class="num">${e.proj}</td><td class="num">${(e.model_p_over*100).toFixed(0)}%</td><td class="num" style="color:var(--muted)">${(e.market_p_over*100).toFixed(0)}%</td><td class="num" style="text-transform:uppercase;font-size:12px">${e.bet}</td><td class="num ${e.ev_per_1u>0?'ev-pos':'ev-neg'}">${e.ev_per_1u>0?'+':''}${e.ev_per_1u.toFixed(2)}</td></tr>`).join("");
+  R.innerHTML=`<div class="headline"><div><div class="lab">Priced ${d.edges.length} props</div><div class="val" style="font-size:26px">${d.edges.filter(e=>e.ev_per_1u>0).length} +EV</div></div><div class="sub">sorted by EV per 1u</div></div>
+    <div class="scroll"><table><thead><tr><th>Player</th><th>Market</th><th class="num">Line</th><th class="num">Proj</th><th class="num">Model</th><th class="num">Mkt</th><th>Bet</th><th class="num">EV/1u</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="note">EV uses the odds you supplied. Made-up lines → made-up edges; feed real book lines for real edges.</div>`;
+}
 </script>
 </body>
 </html>

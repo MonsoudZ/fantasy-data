@@ -150,11 +150,17 @@ pip install fastapi "uvicorn[standard]"
 python -m ffdata.web        # -> http://127.0.0.1:8000
 ```
 
-A polished browser front-end over all of the above: pick week/scoring/mode,
-search the full slate of ~300 projectable players (or paste your roster), and
-get the recommended lineup with its win probability or ceiling. "Full slate"
-optimizes over every player (DFS); the first run for a scoring type trains the
-model (~2 min), then it's instant.
+A polished, tabbed browser front-end over the whole toolkit:
+
+- **Lineup** — build your roster by position (QB/RB/WR/TE search, not typing),
+  then optimize for win probability, tournament ceiling, or a stack. "Full slate"
+  optimizes over every player (DFS).
+- **Draft board** — a live, VOR/auction-ranked board; click "Draft" to mark
+  players gone and best-available updates instantly.
+- **Prop edges** — paste sportsbook prop lines, get the +EV bets ranked.
+
+The first request for a given model trains it (~20 s for the draft board, ~2 min
+for the lineup/props models), then it's cached and instant.
 
 ## Find player-prop edges
 
