@@ -37,17 +37,22 @@ class League:
     teams: int = 12
     drafted: list[str] = field(default_factory=list)
     keepers: list = field(default_factory=list)   # list of [player, cost]
+    # Optional full custom scoring (ScoringRules field dict). When set it wins
+    # over the `scoring` preset label -- how imported leagues keep exact scoring.
+    rules: dict | None = None
 
     def validated(self) -> "League":
         """Return self after checking fields; raise ValueError on bad input."""
         if not str(self.name).strip():
             raise ValueError("league name is required")
-        if self.scoring not in _SCORING:
-            raise ValueError(f"scoring must be one of {_SCORING}, got {self.scoring!r}")
+        if self.scoring not in _SCORING and self.scoring != "custom":
+            raise ValueError(f"scoring must be a preset or 'custom', got {self.scoring!r}")
         if not (2 <= int(self.teams) <= 32):
             raise ValueError(f"teams must be in 2..32, got {self.teams}")
         if not (1999 <= int(self.season) <= 2100):
             raise ValueError(f"season out of range: {self.season}")
+        if self.rules is not None and not isinstance(self.rules, dict):
+            raise ValueError("rules must be a scoring field dict or null")
         return self
 
 
@@ -65,16 +70,19 @@ class Team:
     scoring: str = "ppr"
     projector: str = "gbm"
     roster: dict = field(default_factory=lambda: {p: [] for p in _POSITIONS})
+    rules: dict | None = None   # optional full custom scoring (see League.rules)
 
     def validated(self) -> "Team":
         if not str(self.name).strip():
             raise ValueError("team name is required")
-        if self.scoring not in _SCORING:
-            raise ValueError(f"scoring must be one of {_SCORING}, got {self.scoring!r}")
+        if self.scoring not in _SCORING and self.scoring != "custom":
+            raise ValueError(f"scoring must be a preset or 'custom', got {self.scoring!r}")
         if self.projector not in _PROJECTORS:
             raise ValueError(f"projector must be one of {_PROJECTORS}, got {self.projector!r}")
         if not (1999 <= int(self.season) <= 2100):
             raise ValueError(f"season out of range: {self.season}")
+        if self.rules is not None and not isinstance(self.rules, dict):
+            raise ValueError("rules must be a scoring field dict or null")
         # Normalize the roster to exactly the skill positions, lists of names.
         src = self.roster if isinstance(self.roster, dict) else {}
         self.roster = {p: [str(n) for n in src.get(p, []) or []] for p in _POSITIONS}

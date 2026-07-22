@@ -10,6 +10,7 @@ should train against.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import pandas as pd
@@ -34,6 +35,36 @@ class ScoringRules:
 PPR = ScoringRules()
 HALF_PPR = ScoringRules(reception=0.5)
 STANDARD = ScoringRules(reception=0.0)
+
+PRESETS = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
+
+
+def rules_from(scoring: str | None = "ppr", custom: dict | None = None) -> ScoringRules:
+    """Resolve a ScoringRules from a preset name and/or an explicit field dict.
+
+    `custom` (a subset of ScoringRules field names -> values) wins when given --
+    that's how an imported league's exact scoring (TE-premium, 6-pt pass TD, ...)
+    flows through. Unknown keys are ignored so a platform's extra settings don't
+    break the mapping.
+    """
+    if custom:
+        fields = {f.name for f in dataclasses.fields(ScoringRules)}
+        clean = {k: float(v) for k, v in custom.items() if k in fields}
+        return ScoringRules(**clean)
+    return PRESETS.get((scoring or "ppr").lower(), PPR)
+
+
+def rules_to_dict(rules: ScoringRules) -> dict:
+    """ScoringRules -> a JSON-serializable field dict (for persistence)."""
+    return dataclasses.asdict(rules)
+
+
+def preset_name(rules: ScoringRules) -> str:
+    """The matching preset name ('ppr'/'half'/'standard'), or 'custom'."""
+    for name, preset in PRESETS.items():
+        if rules == preset:
+            return name
+    return "custom"
 
 
 def score(weekly: pd.DataFrame, rules: ScoringRules, col: str = "fp") -> pd.DataFrame:
