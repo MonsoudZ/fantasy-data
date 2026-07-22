@@ -77,6 +77,7 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - `data/` and `.venv/` are gitignored. Seasons 2019-2025 for weekly/injuries/
   snaps/rosters; schedules is one all-seasons file (1999-2026); 2026 rosters are
   preseason (for drafting). `pbp` is opt-in and large.
-- Draft/dynasty values are currently **PPR only** (aggregate from
-  `fantasy_points_ppr`); the lineup tools honor any `ScoringRules`.
+- Draft/dynasty values **honor any `ScoringRules`** (scored from raw stats via
+  `scoring.score()`, same as the weekly path); default PPR. CLIs take
+  `--scoring ppr|half|standard`; the API takes a `rules=` / `scoring` arg.
 - Rookies are skipped by the draft model (no prior season → needs a draft-capital model).

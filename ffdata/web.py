@@ -178,6 +178,7 @@ def optimize(req: OptRequest):
 class DraftRequest(BaseModel):
     season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
     teams: int = Field(12, ge=2, le=32)
+    scoring: str = "ppr"
     drafted: list[str] = []
     position: str | None = None
     n: int = Field(50, ge=1, le=500)
@@ -185,10 +186,13 @@ class DraftRequest(BaseModel):
 
 @app.post("/api/draft")
 def api_draft(req: DraftRequest):
-    key = (req.season, req.teams)
+    if req.scoring not in _RULES:
+        return {"ok": False, "error": "bad scoring"}
+    key = (req.season, req.teams, req.scoring)
     try:
         if key not in _DRAFT:
-            _cache_put(_DRAFT, key, draft_board(req.season, {**DEFAULT_LEAGUE, "teams": req.teams}))
+            _cache_put(_DRAFT, key, draft_board(
+                req.season, {**DEFAULT_LEAGUE, "teams": req.teams}, rules=_RULES[req.scoring]))
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("draft_board failed (%s)", key)
         return {"ok": False, "error": "could not build the draft board (see server logs)"}

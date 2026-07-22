@@ -115,8 +115,13 @@ survives. This is how real DFS optimizers enforce stack rules.
 
 ```bash
 python -m ffdata.draft --season 2025               # VOR-ranked board + auction $
+python -m ffdata.draft --season 2025 --scoring half # values in your league's scoring
 python -m ffdata.draft --season 2025 --position RB --drafted "Bijan Robinson,Breece Hall"
 ```
+
+Draft and dynasty values are scored under whatever `ScoringRules` you pass
+(`--scoring ppr|half|standard`, or a custom `ScoringRules` via the API), from raw
+stats — not a hard-coded PPR column — so the board matches your league.
 
 Drafting is a separate model: it projects a player's whole *season* from their
 prior-season production + age + experience (there's no in-season data at draft

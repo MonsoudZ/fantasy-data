@@ -31,8 +31,11 @@ import pandas as pd
 import lightgbm as lgb
 
 from .db import connect
+from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
 
 POSITIONS = ("QB", "RB", "WR", "TE")
+# Named scoring presets for the CLIs. Any ScoringRules works via the API.
+_RULES = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
 DEFAULT_LEAGUE = {"teams": 12, "budget": 200, "roster_spots": 15,
                   "starters": {"QB": 1, "RB": 2, "WR": 3, "TE": 1}, "flex": 1}
 
@@ -49,20 +52,29 @@ _PARAMS = dict(n_estimators=400, learning_rate=0.03, num_leaves=31, min_child_sa
 _BLEND = 0.4  # weight on the model; 1 - _BLEND on prior-season total
 
 
-def _season_agg(con) -> pd.DataFrame:
-    """Per player-season regular-season totals (PPR)."""
-    return con.sql("""
-        select player_id, season, any_value(position) as position,
-               any_value(player_display_name) as player, count(*) as games,
-               sum(fantasy_points_ppr) as fp, sum(targets) as targets,
-               sum(carries) as carries, sum(receptions) as receptions,
-               sum(receiving_yards) as rec_yds, sum(rushing_yards) as rush_yds,
-               sum(passing_yards) as pass_yds, sum(passing_tds) as pass_tds,
-               sum(rushing_tds) as rush_tds, sum(receiving_tds) as rec_tds,
-               avg(target_share) as tgt_share
-        from weekly where season_type = 'REG' and position in ('QB','RB','WR','TE')
-        group by player_id, season
+def _season_agg(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+    """Per player-season regular-season totals, scored under `rules`.
+
+    Fantasy points come from scoring.score() over the raw weekly stats -- the
+    same league-agnostic path the weekly tools use -- not the precomputed
+    `fantasy_points_ppr` column, so draft/dynasty values honor any ScoringRules.
+    With the default (PPR) this reproduces the old `fantasy_points_ppr` totals.
+    """
+    weekly = con.sql("""
+        select * from weekly
+        where season_type = 'REG' and position in ('QB','RB','WR','TE')
     """).df()
+    weekly = score(weekly, rules, col="fp")
+    return (
+        weekly.groupby(["player_id", "season"], as_index=False)
+        .agg(position=("position", "first"), player=("player_display_name", "first"),
+             games=("fp", "size"), fp=("fp", "sum"), targets=("targets", "sum"),
+             carries=("carries", "sum"), receptions=("receptions", "sum"),
+             rec_yds=("receiving_yards", "sum"), rush_yds=("rushing_yards", "sum"),
+             pass_yds=("passing_yards", "sum"), pass_tds=("passing_tds", "sum"),
+             rush_tds=("rushing_tds", "sum"), rec_tds=("receiving_tds", "sum"),
+             tgt_share=("target_share", "mean"))
+    )
 
 
 def _roster_info(con) -> pd.DataFrame:
@@ -96,16 +108,21 @@ def _team_coach(con) -> pd.DataFrame:
     """).df()
 
 
-def _sos(con) -> pd.DataFrame:
+def _sos(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     """Strength of schedule: for each team-season-position, the average fantasy
     points its upcoming opponents allowed to that position the *prior* year.
     Higher = easier schedule. Uses the known schedule + last year's defenses,
-    so it's available at draft time and leak-free."""
-    allowed = con.sql("""
-        select opponent_team as opp, position, season, sum(fantasy_points_ppr) as allowed
-        from weekly where season_type='REG' and position in ('QB','RB','WR','TE')
-        group by opponent_team, position, season
+    so it's available at draft time and leak-free. Points-allowed is scored under
+    the same `rules` as everything else for consistency."""
+    weekly = con.sql("""
+        select * from weekly
+        where season_type='REG' and position in ('QB','RB','WR','TE')
     """).df()
+    weekly = score(weekly, rules, col="fp")
+    allowed = (
+        weekly.groupby(["opponent_team", "position", "season"], as_index=False)["fp"]
+        .sum().rename(columns={"opponent_team": "opp", "fp": "allowed"})
+    )
     opp = con.sql("""
         select season, home_team as team, away_team as opp from schedules where game_type='REG'
         union all
@@ -117,11 +134,11 @@ def _sos(con) -> pd.DataFrame:
     return sos.rename(columns={"allowed": "sos"})
 
 
-def _feature_frame(con) -> pd.DataFrame:
+def _feature_frame(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     """Feature rows: prior-season aggregates (S) + preseason context at S+1 ->
     target = fp at S+1. Target is NaN for the not-yet-played season."""
-    agg = _season_agg(con)
-    ts, coach, sos = _team_season(con), _team_coach(con), _sos(con)
+    agg = _season_agg(con, rules)
+    ts, coach, sos = _team_season(con), _team_coach(con), _sos(con, rules)
     feat = agg.rename(columns={
         "games": "p_games", "fp": "p_fp", "targets": "p_targets", "carries": "p_carries",
         "receptions": "p_receptions", "rec_yds": "p_rec_yds", "rush_yds": "p_rush_yds",
@@ -157,14 +174,15 @@ def _feature_frame(con) -> pd.DataFrame:
     return df
 
 
-def project_season(target_season: int, con=None) -> pd.DataFrame:
+def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
     """Project every returning player's total points for `target_season`.
 
     Trains on pairs whose target season is strictly before `target_season`
-    (leak-free), then predicts the players entering `target_season`.
+    (leak-free), then predicts the players entering `target_season`. `rules`
+    sets the scoring the projection is expressed in (default PPR).
     """
     con = con or connect()
-    df = _feature_frame(con)
+    df = _feature_frame(con, rules)
     train = df[(df["tseason"] < target_season) & df["target_fp"].notna()]
     test = df[df["tseason"] == target_season].copy()
     if test.empty:
@@ -189,10 +207,15 @@ def _replacement_ranks(league: dict) -> dict:
     return base
 
 
-def draft_board(target_season: int, league: dict | None = None, con=None) -> pd.DataFrame:
-    """Ranked draft board: season projection, VOR, and auction dollar value."""
+def draft_board(target_season: int, league: dict | None = None,
+                rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+    """Ranked draft board: season projection, VOR, and auction dollar value.
+
+    `rules` sets the league scoring (default PPR); VOR and auction $ follow from
+    the scored projections, so the whole board reflects the chosen scoring.
+    """
     league = league or DEFAULT_LEAGUE
-    proj = project_season(target_season, con=con)
+    proj = project_season(target_season, rules=rules, con=con)
     if proj.empty:
         return proj
     repl_rank = _replacement_ranks(league)
@@ -270,15 +293,15 @@ def trade_value(board: pd.DataFrame, side_a: list, side_b: list) -> dict:
     return {"side_a": a, "side_b": b, "diff": diff, "verdict": verdict}
 
 
-def backtest_rank(target_season: int, con=None) -> dict:
+def backtest_rank(target_season: int, rules: ScoringRules = PPR, con=None) -> dict:
     """Rank quality of the preseason projection vs the actual season finish."""
     from scipy.stats import spearmanr
     con = con or connect()
-    proj = project_season(target_season, con=con)
-    actual = _season_agg(con)
+    proj = project_season(target_season, rules=rules, con=con)
+    actual = _season_agg(con, rules)
     actual = actual[actual["season"] == target_season][["player_id", "fp"]]
     m = proj.merge(actual, on="player_id", how="inner")
-    naive = _feature_frame(con)
+    naive = _feature_frame(con, rules)
     naive = naive[naive["tseason"] == target_season][["player_id", "p_fp"]]
     m = m.merge(naive, on="player_id", how="left")
     return {"season": target_season, "n": len(m),
@@ -292,14 +315,16 @@ if __name__ == "__main__":
     from .ingest import current_nfl_season
     p = argparse.ArgumentParser(prog="python -m ffdata.draft", description="Draft board / value rankings")
     p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--scoring", choices=list(_RULES), default="ppr")
     p.add_argument("--position", choices=list(POSITIONS))
     p.add_argument("--drafted", default="", help="comma-separated already-drafted players")
     p.add_argument("--n", type=int, default=20)
     args = p.parse_args()
-    board = draft_board(args.season)
+    board = draft_board(args.season, rules=_RULES[args.scoring])
     if board.empty:
         raise SystemExit(f"No draftable data for {args.season}.")
     avail = best_available(board, args.drafted.split(",") if args.drafted else [], args.position, args.n)
     pd.set_option("display.width", 100)
-    print(f"\nDraft board {args.season} (VOR = value over replacement, $ = auction value):\n")
+    print(f"\nDraft board {args.season} ({args.scoring.upper()}; "
+          f"VOR = value over replacement, $ = auction value):\n")
     print(avail[["player", "position", "proj", "vor", "auction"]].to_string(index=False))

@@ -20,12 +20,14 @@ import numpy as np
 import pandas as pd
 
 from .db import connect
-from .draft import POSITIONS, draft_board, _season_agg, _roster_info
+from .draft import POSITIONS, draft_board, _season_agg, _roster_info, _RULES
+from .scoring import PPR, ScoringRules
 
 _MIN_AGE, _MAX_AGE = 21, 36
 
 
-def age_curves(con=None, before_season: int | None = None) -> dict:
+def age_curves(con=None, before_season: int | None = None,
+               rules: ScoringRules = PPR) -> dict:
     """Per-position relative value (0-1) by age.
 
     Built with the delta method: average the year-over-year PPG change for the
@@ -36,9 +38,10 @@ def age_curves(con=None, before_season: int | None = None) -> dict:
     `before_season`: if given, only seasons strictly before it feed the curves.
     A dynasty valuation made in the preseason of season S must not learn its age
     curves from S or later (that would be look-ahead); pass ``before_season=S``.
+    `rules`: the scoring the PPG curve is built from (default PPR).
     """
     con = con or connect()
-    m = _season_agg(con).merge(_roster_info(con), on=["player_id", "season"], how="inner")
+    m = _season_agg(con, rules).merge(_roster_info(con), on=["player_id", "season"], how="inner")
     if before_season is not None:
         # Drop target-or-later seasons before the shift(-1) below, so no A->A+1
         # transition can peek into the season being valued.
@@ -66,13 +69,17 @@ def age_curves(con=None, before_season: int | None = None) -> dict:
 
 
 def dynasty_board(target_season: int, years: int = 4, discount: float = 0.85,
-                  con=None) -> pd.DataFrame:
-    """Rank players by dynasty value = discounted, age-curve-projected redraft value."""
+                  rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+    """Rank players by dynasty value = discounted, age-curve-projected redraft value.
+
+    `rules` sets the league scoring (default PPR); the underlying draft board and
+    the age curves are both built under it.
+    """
     con = con or connect()
-    board = draft_board(target_season, con=con)
+    board = draft_board(target_season, rules=rules, con=con)
     if board.empty:
         return board
-    curves = age_curves(con, before_season=target_season)
+    curves = age_curves(con, before_season=target_season, rules=rules)
     ri = _roster_info(con)
     ages = ri[ri["season"] == target_season][["player_id", "birth_year"]]
     board = board.merge(ages, on="player_id", how="left")
@@ -99,14 +106,16 @@ if __name__ == "__main__":
     from .ingest import current_nfl_season
     p = argparse.ArgumentParser(prog="python -m ffdata.dynasty", description="Dynasty value board")
     p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--scoring", choices=list(_RULES), default="ppr")
     p.add_argument("--years", type=int, default=4, help="future seasons to value")
     p.add_argument("--discount", type=float, default=0.85)
     p.add_argument("--n", type=int, default=25)
     args = p.parse_args()
-    board = dynasty_board(args.season, years=args.years, discount=args.discount)
+    board = dynasty_board(args.season, years=args.years, discount=args.discount,
+                          rules=_RULES[args.scoring])
     if board.empty:
         raise SystemExit(f"No dynasty data for {args.season}.")
     pd.set_option("display.width", 100)
-    print(f"\nDynasty board {args.season} "
-          f"(value = {args.years}yr age-curve-projected, discount {args.discount}):\n")
+    print(f"\nDynasty board {args.season} ({args.scoring.upper()}; "
+          f"value = {args.years}yr age-curve-projected, discount {args.discount}):\n")
     print(board.head(args.n).to_string(index=False))
