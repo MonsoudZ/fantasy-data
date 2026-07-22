@@ -26,7 +26,8 @@ from .ingest import current_nfl_season
 from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match
 from .props import price_props
-from .scoring import PPR, HALF_PPR, STANDARD
+from .scoring import PPR, HALF_PPR, STANDARD, rules_from
+from .sleeper import import_league, list_user_leagues
 from .store import (
     League, Team, delete_league, delete_team, list_leagues, list_teams,
     save_league, save_team,
@@ -54,16 +55,23 @@ def _cache_put(cache: dict, key, value):
     return value
 
 
-def _sim(scoring: str, projector: str) -> MatchupSimulator:
-    key = (scoring, projector)
+def _scoring_key(scoring: str, rules: dict | None):
+    """A hashable, stable cache key for a scoring config (preset or custom)."""
+    return ("custom", tuple(sorted(rules.items()))) if rules else scoring
+
+
+def _sim(scoring_key, projector: str, rules_obj) -> MatchupSimulator:
+    key = (scoring_key, projector)
     if key not in _SIMS:
-        _cache_put(_SIMS, key, MatchupSimulator.fit(projector=projector, rules=_RULES[scoring]))
+        _cache_put(_SIMS, key, MatchupSimulator.fit(projector=projector, rules=rules_obj))
     return _SIMS[key]
 
 
-def _board(scoring: str, projector: str, season: int, week: int):
-    sim = _sim(scoring, projector)
-    key = (scoring, projector, season, week)
+def _board(scoring: str, projector: str, season: int, week: int, rules: dict | None = None):
+    rules_obj = rules_from(scoring, rules)
+    sk = _scoring_key(scoring, rules)
+    sim = _sim(sk, projector, rules_obj)
+    key = (sk, projector, season, week)
     if key not in _BOARDS:
         _cache_put(_BOARDS, key, sim.project(season, week).reset_index(drop=True))
     return sim, _BOARDS[key]
@@ -98,6 +106,7 @@ class OptRequest(BaseModel):
     ceiling: float = Field(0.90, ge=0.5, lt=1.0)
     stack_size: int = Field(2, ge=1, le=5)
     bringback: int = Field(1, ge=0, le=3)
+    rules: dict | None = None   # full custom scoring (from an imported league)
 
 
 @app.get("/")
@@ -114,7 +123,7 @@ def config():
 def players(req: OptRequest):
     """The full projection board for a week -- every projectable player."""
     try:
-        _, board = _board(req.scoring, req.projector, req.season, req.week)
+        _, board = _board(req.scoring, req.projector, req.season, req.week, req.rules)
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("projection board failed (%s)", req)
         return {"ok": False, "error": "could not build the projection board (see server logs)"}
@@ -128,10 +137,10 @@ def players(req: OptRequest):
 
 @app.post("/api/optimize")
 def optimize(req: OptRequest):
-    if req.scoring not in _RULES or req.projector not in ("gbm", "neural"):
+    if req.projector not in ("gbm", "neural") or (req.scoring not in _RULES and not req.rules):
         return {"ok": False, "error": "bad scoring or projector"}
     try:
-        sim, board = _board(req.scoring, req.projector, req.season, req.week)
+        sim, board = _board(req.scoring, req.projector, req.season, req.week, req.rules)
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("projection build failed (%s)", req)
         return {"ok": False, "error": "could not build projections (see server logs)"}
@@ -187,17 +196,19 @@ class DraftRequest(BaseModel):
     drafted: list[str] = []
     position: str | None = None
     n: int = Field(50, ge=1, le=500)
+    rules: dict | None = None   # full custom scoring (from an imported league)
 
 
 @app.post("/api/draft")
 def api_draft(req: DraftRequest):
-    if req.scoring not in _RULES:
+    if req.scoring not in _RULES and not req.rules:
         return {"ok": False, "error": "bad scoring"}
-    key = (req.season, req.teams, req.scoring)
+    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules))
     try:
         if key not in _DRAFT:
             _cache_put(_DRAFT, key, draft_board(
-                req.season, {**DEFAULT_LEAGUE, "teams": req.teams}, rules=_RULES[req.scoring]))
+                req.season, {**DEFAULT_LEAGUE, "teams": req.teams},
+                rules=rules_from(req.scoring, req.rules)))
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
         _log.exception("draft_board failed (%s)", key)
         return {"ok": False, "error": "could not build the draft board (see server logs)"}
@@ -262,6 +273,7 @@ class LeagueModel(BaseModel):
     teams: int = Field(12, ge=2, le=32)
     drafted: list[str] = []
     keepers: list = []
+    rules: dict | None = None
 
 
 class LeagueName(BaseModel):
@@ -293,6 +305,7 @@ class TeamModel(BaseModel):
     scoring: str = "ppr"
     projector: str = "gbm"
     roster: dict = Field(default_factory=lambda: {"QB": [], "RB": [], "WR": [], "TE": []})
+    rules: dict | None = None
 
 
 @app.get("/api/teams")
@@ -312,6 +325,51 @@ def api_team_save(req: TeamModel):
 @app.post("/api/teams/delete")
 def api_team_delete(req: LeagueName):
     return {"ok": True, "deleted": delete_team(req.name)}
+
+
+# --------------------------------------------------------------------------- #
+# Import from Sleeper (public read-only API; see ffdata/sleeper.py)
+# --------------------------------------------------------------------------- #
+
+class SleeperUser(BaseModel):
+    username: str
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+
+
+class SleeperImport(BaseModel):
+    league_id: str
+    username: str
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+
+
+@app.post("/api/import/sleeper/leagues")
+def api_sleeper_leagues(req: SleeperUser):
+    """List a Sleeper user's leagues for a season, so the UI can offer a picker."""
+    try:
+        leagues = list_user_leagues(req.username, req.season)
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("sleeper league list failed (%s)", req.username)
+        return {"ok": False, "error": "could not reach Sleeper (check the username and your network)"}
+    if not leagues:
+        return {"ok": False, "error": f"No Sleeper leagues found for '{req.username}' in {req.season}."}
+    return {"ok": True, "leagues": leagues}
+
+
+@app.post("/api/import/sleeper/league")
+def api_sleeper_import(req: SleeperImport):
+    """Import one Sleeper league -> save it as a League (settings/scoring/drafted)
+    and a Team (your roster). Both then appear in the saved dropdowns."""
+    try:
+        league, team = import_league(req.league_id, req.username, req.season)
+        save_league(league)
+        save_team(team)
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("sleeper import failed (%s)", req.league_id)
+        return {"ok": False, "error": "could not import that league from Sleeper"}
+    return {"ok": True, "league": league.name, "team": team.name,
+            "scoring": league.scoring, "teams": league.teams,
+            "drafted": len(league.drafted),
+            "roster_size": sum(len(v) for v in team.roster.values())}
 
 
 def main() -> None:

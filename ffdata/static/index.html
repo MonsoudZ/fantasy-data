@@ -195,6 +195,13 @@
             <button type="button" id="d-save" class="draftbtn">Save</button>
             <button type="button" id="d-del" class="draftbtn">Delete</button>
           </div>
+          <label>Import from Sleeper</label>
+          <div class="row">
+            <input type="text" id="d-sleeper-user" placeholder="Sleeper username" style="flex:1" />
+            <button type="button" id="d-sleeper-find" class="draftbtn">Find</button>
+          </div>
+          <select id="d-sleeper-leagues" style="margin-top:8px;display:none"></select>
+          <div class="hint" id="d-sleeper-hint">Pulls league settings, scoring, your roster &amp; draft — no login. Uses the season above.</div>
           <button class="go" id="d-go">Load draft board</button>
           <div class="hint">VOR &amp; auction values reflect the scoring above. Save keeps season, scoring, teams &amp; who's drafted. First load trains the season model (~20 s).</div>
           <label>Drafted <span id="d-count" style="text-transform:none;color:var(--muted)"></span></label>
@@ -242,8 +249,8 @@ function seg(id, cb){ document.querySelectorAll(`#${id} button`).forEach(b=>b.on
 fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season"].forEach(i=>$("#"+i).value=c.season); } }).catch(()=>{});
 
 /* ============ LINEUP ============ */
-const L = { scoring:"ppr", mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
-seg("l-scoring", v=>{ L.scoring=v; PLAYERS=null; });
+const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
+seg("l-scoring", v=>{ L.scoring=v; L.rules=null; PLAYERS=null; });
 const HINTS={ h2h:"Beat one opponent — balances floor and ceiling.", tournament:"Large field — maximize ceiling.", stack:"Best lineup around a QB game stack." };
 seg("l-mode", v=>{ L.mode=v; $("#l-oppwrap").style.display=v==="h2h"?"block":"none"; });
 $("#l-slate").onclick=()=>{ L.full=!L.full; $("#l-slate").classList.toggle("on",L.full);
@@ -252,9 +259,9 @@ $("#l-slate").onclick=()=>{ L.full=!L.full; $("#l-slate").classList.toggle("on",
 
 let PLAYERS=null, ploadKey=null;
 async function players(){
-  const key = $("#l-season").value+"|"+$("#l-week").value+"|"+L.scoring+"|"+$("#l-proj").value;
+  const key = $("#l-season").value+"|"+$("#l-week").value+"|"+L.scoring+"|"+$("#l-proj").value+"|"+(L.rules?JSON.stringify(L.rules):"");
   if(PLAYERS && ploadKey===key) return PLAYERS;
-  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, projector:$("#l-proj").value };
+  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules, projector:$("#l-proj").value };
   const r=await fetch("/api/players",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const d=await r.json(); PLAYERS=d.ok?d.players:[]; ploadKey=key; return PLAYERS;
 }
@@ -299,14 +306,14 @@ $("#l-team").onchange=()=>{
   const t = TEAMS.find(x=>x.name===$("#l-team").value); if(!t) return;
   $("#l-season").value=t.season; $("#l-teamname").value=t.name; $("#l-proj").value=t.projector||"gbm";
   document.querySelectorAll("#l-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===t.scoring));
-  L.scoring=t.scoring;
+  L.scoring=t.scoring; L.rules=t.rules||null;
   L.roster={QB:[],RB:[],WR:[],TE:[]};
   ["QB","RB","WR","TE"].forEach(p=>{ if(Array.isArray(t.roster&&t.roster[p])) L.roster[p]=t.roster[p].slice(); });
   PLAYERS=null; renderRoster();
 };
 $("#l-tsave").onclick=async()=>{
   const name=$("#l-teamname").value.trim(); if(!name){ $("#l-teamname").focus(); return; }
-  const body={ name, season:+$("#l-season").value, scoring:L.scoring, projector:$("#l-proj").value, roster:L.roster };
+  const body={ name, season:+$("#l-season").value, scoring:L.scoring, rules:L.rules, projector:$("#l-proj").value, roster:L.roster };
   const r=await (await fetch("/api/teams",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
   if(!r.ok){ alert(r.error||"could not save team"); return; }
   await refreshTeams(name);
@@ -324,7 +331,7 @@ $("#l-go").onclick=async()=>{
   if(!roster && !L.full){ alert("Add some players to your roster first."); return; }
   const btn=$("#l-go"); btn.disabled=true; btn.textContent="Optimizing…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting & optimizing…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
-  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, projector:$("#l-proj").value,
+  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules, projector:$("#l-proj").value,
     mode:L.mode, roster, opponent:L.opp.join("\n"), full_slate:L.full, ceiling:0.9, stack_size:2, bringback:1 };
   try{ const d=await (await fetch("/api/optimize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderLineup(d); }
   catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
@@ -341,13 +348,13 @@ function renderLineup(d){
 }
 
 /* ============ DRAFT ============ */
-const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr" };
-seg("d-scoring", v=>{ D.scoring=v; if(D.board.length) loadDraft(); });   // re-price on change once loaded
+const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null };
+seg("d-scoring", v=>{ D.scoring=v; D.rules=null; if(D.board.length) loadDraft(); });   // preset clears any custom rules
 async function loadDraft(){
   const btn=$("#d-go"); btn.disabled=true; btn.textContent="Loading…";
   $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>Training season model…</div>`;
   try{
-    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,n:300})})).json();
+    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,rules:D.rules,n:300})})).json();
     if(!d.ok){ $("#d-board").innerHTML=`<div class="err">${d.error}</div>`; }
     else { D.board=d.players; renderFilters(); renderBoard(); }
   }catch(e){ $("#d-board").innerHTML=`<div class="err">${e}</div>`; }
@@ -380,14 +387,14 @@ $("#d-league").onchange=()=>{
   const l = LEAGUES.find(x=>x.name===$("#d-league").value); if(!l) return;
   $("#d-season").value=l.season; $("#d-teams").value=l.teams; $("#d-lgname").value=l.name;
   document.querySelectorAll("#d-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===l.scoring));
-  D.scoring=l.scoring;
+  D.scoring=l.scoring; D.rules=l.rules||null;
   D.drafted=new Set(l.drafted.map(norm)); D._names={}; l.drafted.forEach(n=>D._names[norm(n)]=n);
   renderDrafted(); if(D.board.length) loadDraft();
 };
 $("#d-save").onclick=async()=>{
   const name=$("#d-lgname").value.trim(); if(!name){ $("#d-lgname").focus(); return; }
   const drafted=[...D.drafted].map(k=>(D._names&&D._names[k])||k);
-  const body={ name, season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, drafted };
+  const body={ name, season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, rules:D.rules, drafted };
   const r=await (await fetch("/api/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
   if(!r.ok){ alert(r.error||"could not save league"); return; }
   await refreshLeagues(name);
@@ -399,6 +406,36 @@ $("#d-del").onclick=async()=>{
   $("#d-lgname").value=""; await refreshLeagues("");
 };
 refreshLeagues();
+
+/* ---- import from Sleeper ---- */
+$("#d-sleeper-find").onclick=async()=>{
+  const username=$("#d-sleeper-user").value.trim(); if(!username){ $("#d-sleeper-user").focus(); return; }
+  const btn=$("#d-sleeper-find"), sel=$("#d-sleeper-leagues"); btn.disabled=true; btn.textContent="…";
+  $("#d-sleeper-hint").textContent="Looking up your leagues…";
+  try{
+    const d=await (await fetch("/api/import/sleeper/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,season:+$("#d-season").value})})).json();
+    if(!d.ok){ $("#d-sleeper-hint").textContent=d.error||"Sleeper lookup failed."; sel.style.display="none"; }
+    else{
+      sel.innerHTML=`<option value="">— pick a league to import —</option>`+d.leagues.map(l=>`<option value="${l.league_id}">${l.name} · ${l.scoring.toUpperCase()} · ${l.teams}tm</option>`).join("");
+      sel.style.display="block";
+      $("#d-sleeper-hint").textContent=`${d.leagues.length} league(s) — pick one to import.`;
+    }
+  }catch(e){ $("#d-sleeper-hint").textContent="Sleeper request failed."; }
+  btn.disabled=false; btn.textContent="Find";
+};
+$("#d-sleeper-leagues").onchange=async()=>{
+  const league_id=$("#d-sleeper-leagues").value; if(!league_id) return;
+  const username=$("#d-sleeper-user").value.trim();
+  $("#d-sleeper-hint").textContent="Importing…";
+  try{
+    const d=await (await fetch("/api/import/sleeper/league",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({league_id,username,season:+$("#d-season").value})})).json();
+    if(!d.ok){ $("#d-sleeper-hint").textContent=d.error||"Import failed."; return; }
+    $("#d-sleeper-hint").textContent=`Imported “${d.league}” (${d.scoring}, ${d.teams}tm) — ${d.drafted} drafted, ${d.roster_size} on your roster. Saved as a league + team.`;
+    await refreshLeagues(d.league);
+    if(typeof refreshTeams==="function") await refreshTeams(d.team);
+    $("#d-league").value=d.league; $("#d-league").onchange();     // load the imported league
+  }catch(e){ $("#d-sleeper-hint").textContent="Import request failed."; }
+};
 
 /* ============ PROPS ============ */
 $("#pr-sample").onclick=()=>{ $("#pr-lines").value=`player,market,line,over_odds,under_odds

@@ -169,10 +169,21 @@ A polished, tabbed browser front-end over the whole toolkit:
 
 - **Lineup** — build your roster by position (QB/RB/WR/TE search, not typing),
   then optimize for win probability, tournament ceiling, or a stack. "Full slate"
-  optimizes over every player (DFS).
+  optimizes over every player (DFS). Save your roster/scoring/model as a **team**.
 - **Draft board** — a live, VOR/auction-ranked board; click "Draft" to mark
-  players gone and best-available updates instantly.
+  players gone and best-available updates instantly. Save the setup as a **league**.
 - **Prop edges** — paste sportsbook prop lines, get the +EV bets ranked.
+
+Saved leagues and teams persist locally (`~/.ff-data/`, or `$FFDATA_STATE`), so
+you set up once and come back to them.
+
+**Import from Sleeper.** On the draft tab, type your Sleeper username → pick a
+league → it imports the settings, **exact scoring** (custom scoring like
+TE-premium or 6-pt passing TDs is preserved, not snapped to a preset), your
+roster, and the draft, saving them as a league + team. Sleeper's API is public
+and read-only, so there's no login. (ESPN needs `espn_s2`/`SWID` cookies and
+Yahoo needs OAuth, so those aren't built.) The mapping is unit-tested; validate
+the live fetch against your own account.
 
 The first request for a given model trains it (~20 s for the draft board, ~2 min
 for the lineup/props models), then it's cached and instant.

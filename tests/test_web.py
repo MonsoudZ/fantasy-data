@@ -116,3 +116,47 @@ def test_team_crud_via_api(tmp_path, monkeypatch):
     assert c.post("/api/teams", json={"name": "W", "season": 3000}).status_code == 422
     assert c.post("/api/teams/delete", json={"name": "squad"}).json()["deleted"] is True
     assert c.get("/api/teams").json()["teams"] == []
+
+
+def test_draft_accepts_custom_rules_past_validation():
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    c = TestClient(app)
+    # No data lake here, so it fails building the board -- but it must get PAST
+    # scoring validation (not "bad scoring") when custom rules are supplied.
+    r = c.post("/api/draft", json={"season": 2024, "teams": 10, "scoring": "custom",
+                                   "rules": {"reception": 1.0, "pass_td": 6.0}}).json()
+    assert r["ok"] is False and r["error"] != "bad scoring"
+
+
+def test_sleeper_import_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
+    import ffdata.web as web
+    from ffdata.store import League, Team
+
+    rules = {"reception": 1.0, "pass_td": 6.0}
+    monkeypatch.setattr(web, "list_user_leagues",
+                        lambda u, s: [{"league_id": "L1", "name": "Home",
+                                       "teams": 10, "scoring": "custom"}])
+    monkeypatch.setattr(web, "import_league", lambda lid, u, s: (
+        League(name="Home", season=s, teams=10, scoring="custom", rules=rules,
+               drafted=["Josh Allen"]),
+        Team(name="Home", season=s, scoring="custom", rules=rules,
+             roster={"QB": ["Josh Allen"], "RB": [], "WR": [], "TE": []})))
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+
+    listed = c.post("/api/import/sleeper/leagues",
+                    json={"username": "mcsleeper", "season": 2025}).json()
+    assert listed["ok"] and listed["leagues"][0]["league_id"] == "L1"
+
+    imp = c.post("/api/import/sleeper/league",
+                 json={"league_id": "L1", "username": "mcsleeper", "season": 2025}).json()
+    assert imp["ok"] and imp["scoring"] == "custom"
+    assert imp["drafted"] == 1 and imp["roster_size"] == 1
+
+    # The import persisted both a saved league and a saved team.
+    assert any(lg["name"] == "Home" for lg in c.get("/api/leagues").json()["leagues"])
+    assert any(t["name"] == "Home" for t in c.get("/api/teams").json()["teams"])

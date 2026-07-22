@@ -30,8 +30,10 @@ Network access required (nflverse pulls over HTTP).
 | `optimize.py` | lineup optimizer (h2h / tournament / stack) + weekly CLI |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
-| `draft.py` | preseason season projections, VOR, snake/auction, keepers, trades |
+| `draft.py` | preseason season projections, VOR, snake/auction, keepers, trades, rookies |
 | `dynasty.py` | age curves (delta method) + multi-year dynasty value |
+| `store.py` | JSON persistence for saved leagues + lineup teams (incl. custom scoring) |
+| `sleeper.py` | import a league from Sleeper's public API (settings, scoring, roster, draft) |
 | `web.py` `static/index.html` | FastAPI + tabbed UI |
 
 ## Common commands
@@ -90,3 +92,10 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   drafted and folds them into `draft_board` (`include_rookies=True`). ⚠️ Scaffolded
   but **not yet backtested on real data** — run `draft.backtest_rookies()` before
   trusting the magnitudes. Degrades to veterans-only if `draft_picks` isn't ingested.
+- **Sleeper import** (`sleeper.py`, web tab): pulls a league by username via
+  Sleeper's public read-only API (no auth) → saves a `store.League` (settings,
+  exact custom scoring, drafted) + a `store.Team` (your roster). Custom scoring
+  is preserved as a full `ScoringRules` (stored `rules` dict; label `custom`) and
+  threads through the draft/lineup endpoints. ⚠️ The pure mappers are unit-tested;
+  the live HTTP path is **unvalidated** (egress was blocked when built) — confirm
+  against a real account. ESPN/Yahoo are not built (unofficial-cookie / OAuth).
