@@ -27,7 +27,7 @@ Network access required (nflverse pulls over HTTP).
 | `neural.py` | GRU sequence projector (`NeuralProjector`); needs torch (lazy-imported) |
 | `matchup.py` | Monte Carlo lineup win-prob; residual sampler |
 | `correlation.py` | Gaussian copula for same-game correlation |
-| `optimize.py` | lineup optimizer (h2h / tournament / stack) + weekly CLI |
+| `optimize.py` | lineup optimizer (h2h / tournament / stack), superflex slots, free-agent finder + weekly CLI |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
@@ -109,6 +109,24 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the table can never disagree. ⚠️ Prompt assembly + the availability gate are
   unit-tested with a mocked client; the **live API path is unvalidated** (no egress
   when built) — confirm once you set a key.
+- **Superflex weekly slots** (`optimize.py`): `slots_from_lineup(lineup)` turns a
+  `{starters, flex, superflex}` config into the optimizer's slot tuple, adding a
+  `SUPERFLEX` slot (QB-eligible) so a 2-QB league optimizes its *real* lineup —
+  a second QB can now start. Threads through `/api/optimize` (and the opponent's
+  assembled lineup) via `OptRequest.lineup`; the lineup tab has a **Superflex /
+  2-QB** toggle that sends the canonical superflex config. 1-QB leagues are
+  unaffected (default slots).
+- **Free-agent / waiver finder** (`optimize.free_agent_advice`, `/api/freeagents`,
+  lineup tab): ranks available players by **marginal starting-lineup gain**, not
+  raw projection — for each free agent it recomputes your best starting lineup
+  with him added and reports the point gain over your current best (0 if he
+  doesn't crack it), naming the starter he'd bench. Superflex-aware (same slots),
+  honors scoring, and takes an optional `exclude` list (players rostered by
+  others). This is the honest season-long-pickup metric; it's projection-based,
+  *not* the Monte Carlo win-prob objective (that answers "win this one matchup").
+  A grounded "Explain" button isn't wired here yet — that'd need `/api/advice` to
+  recompute free-agent facts server-side (it only carries board config today), so
+  the ranked table stands on its own for now.
 - **Sleeper import** (`sleeper.py`, web tab): pulls a league by username via
   Sleeper's public read-only API (no auth) → saves a `store.League` (settings,
   exact custom scoring, drafted, starting lineup) + a `store.Team` (your roster).

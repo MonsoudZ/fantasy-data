@@ -44,10 +44,48 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# A standard fantasy starting lineup. FLEX takes any RB/WR/TE.
+# A standard fantasy starting lineup. FLEX takes any RB/WR/TE; SUPERFLEX also
+# takes a QB (a 2-QB / superflex league, where QBs are far more valuable).
 DEFAULT_SLOTS = ("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX")
 _ELIGIBLE = {"QB": {"QB"}, "RB": {"RB"}, "WR": {"WR"}, "TE": {"TE"},
-             "FLEX": {"RB", "WR", "TE"}}
+             "FLEX": {"RB", "WR", "TE"}, "SUPERFLEX": {"QB", "RB", "WR", "TE"}}
+
+
+def slots_from_lineup(lineup: dict | None) -> tuple:
+    """Turn a league lineup config into a slot tuple for the optimizer.
+
+    `lineup` is {"starters": {QB/RB/WR/TE: n}, "flex": n, "superflex": n} -- the
+    same shape a Sleeper import produces. Falls back to DEFAULT_SLOTS when the
+    config is missing or empty, so a 1-QB league is unaffected and a superflex
+    league gets its SUPERFLEX slot (which lets a second QB start).
+    """
+    if not lineup:
+        return DEFAULT_SLOTS
+    starters = lineup.get("starters") or {}
+    slots = []
+    for pos in ("QB", "RB", "WR", "TE"):
+        slots += [pos] * int(starters.get(pos, 0) or 0)
+    slots += ["FLEX"] * int(lineup.get("flex", 0) or 0)
+    slots += ["SUPERFLEX"] * int(lineup.get("superflex", 0) or 0)
+    return tuple(slots) if slots else DEFAULT_SLOTS
+
+
+def _greedy_fill(pool: pd.DataFrame, slots) -> list:
+    """Fill each slot with the highest-projected eligible unused player.
+
+    Returns [[slot, name, position, pred], ...]; a slot with no eligible player
+    left is simply skipped (a short roster yields a partial lineup).
+    """
+    used, lineup = set(), []
+    ranked = pool.sort_values("pred", ascending=False)
+    for slot in slots:
+        for _, r in ranked.iterrows():
+            name = r["player_display_name"]
+            if name not in used and r["position"] in _ELIGIBLE[slot]:
+                used.add(name)
+                lineup.append([slot, name, r["position"], float(r["pred"])])
+                break
+    return lineup
 
 
 class LineupOptimizer:
@@ -97,16 +135,7 @@ class LineupOptimizer:
 
     def _greedy_points(self, pool: pd.DataFrame) -> list:
         """Fill each slot with the highest-projected eligible unused player."""
-        used, lineup = set(), []
-        ranked = pool.sort_values("pred", ascending=False)
-        for slot in self.slots:
-            for _, r in ranked.iterrows():
-                name = r["player_display_name"]
-                if name not in used and r["position"] in _ELIGIBLE[slot]:
-                    used.add(name)
-                    lineup.append([slot, name, r["position"], float(r["pred"])])
-                    break
-        return lineup
+        return _greedy_fill(pool, self.slots)
 
     @staticmethod
     def _winprob(names: list, vecs: dict, opp_total: np.ndarray) -> float:
@@ -335,6 +364,51 @@ def _match(names: list[str], board: pd.DataFrame) -> tuple[pd.DataFrame, list[st
         r = idx.get(_norm(name))
         (rows.append(r) if r is not None else missing.append(name))
     return (pd.DataFrame(rows).reset_index(drop=True) if rows else board.iloc[:0]), missing
+
+
+def free_agent_advice(board: pd.DataFrame, roster: list[str], slots=DEFAULT_SLOTS,
+                      exclude: list[str] | None = None, top: int = 15,
+                      pool_cap: int = 200) -> dict:
+    """Rank available players by how much they'd add to your *starting* lineup.
+
+    Waiver value is not raw projection -- a highly projected WR does nothing for
+    you if your WRs already outproject him. So for each free agent we recompute
+    the projection-optimal starting lineup with him added and measure the
+    MARGINAL gain over your current best; a positive gain means he cracks your
+    lineup, and we name the starter he'd bench. This is deliberately projection-
+    based (expected starting points added), the honest metric for a season-long
+    pickup -- not the Monte Carlo win-prob objective, which answers a different
+    question (winning one specific matchup).
+
+    board: a week's projection board (player_display_name/position/pred [/recent_team]).
+    roster: your players (loosely name-matched). exclude: names to treat as
+    unavailable (e.g. rostered by other managers). Returns your baseline starting
+    projection plus the ranked upgrades.
+    """
+    b = board.reset_index(drop=True)
+    mine, _ = _match(roster or [], b)
+    base = _greedy_fill(mine, slots)
+    base_proj = round(sum(x[3] for x in base), 1)
+    base_names = {x[1] for x in base}
+
+    taken = {_norm(n) for n in (roster or [])} | {_norm(n) for n in (exclude or [])}
+    free = b[~b["player_display_name"].map(lambda s: _norm(s) in taken)]
+    free = free.sort_values("pred", ascending=False).head(pool_cap)
+
+    out = []
+    for _, fa in free.iterrows():
+        aug = pd.concat([mine, fa.to_frame().T], ignore_index=True) if len(mine) else fa.to_frame().T
+        new = _greedy_fill(aug, slots)
+        gain = sum(x[3] for x in new) - sum(x[3] for x in base)
+        if gain <= 1e-6:
+            continue
+        dropped = base_names - {x[1] for x in new}     # the starter he displaces
+        out.append({"player": fa["player_display_name"], "position": fa["position"],
+                    "team": str(fa.get("recent_team", "")), "proj": round(float(fa["pred"]), 1),
+                    "gain": round(float(gain), 1),
+                    "replaces": next(iter(dropped)) if dropped else None})
+    out.sort(key=lambda d: d["gain"], reverse=True)
+    return {"starter_proj": base_proj, "starters": len(base), "upgrades": out[:top]}
 
 
 def _print_lineup(title: str, lineup, board: pd.DataFrame) -> None:

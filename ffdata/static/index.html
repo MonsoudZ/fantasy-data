@@ -162,6 +162,10 @@
           <div class="seg" id="l-mode">
             <button data-v="h2h" class="on">Head-to-head</button><button data-v="tournament">Tournament</button><button data-v="stack">Stack</button>
           </div>
+          <div class="row" style="margin-top:8px;align-items:center">
+            <button type="button" id="l-superflex" class="chip-btn" style="float:none">Superflex / 2-QB</button>
+            <span class="hint" style="margin:0">Adds a QB-eligible flex slot.</span>
+          </div>
 
           <label>Your roster
             <button type="button" id="l-slate" class="chip-btn">⚡ Full slate</button>
@@ -178,6 +182,13 @@
           <label>Projection model</label>
           <select id="l-proj"><option value="gbm">Fast (gradient boosting)</option><option value="neural">Most accurate (neural)</option></select>
           <button class="go" id="l-go">Optimize my lineup</button>
+
+          <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+            <label style="margin-top:0">Waiver / free-agent finder</label>
+            <div class="hint">Ranks available players by how much they'd add to your <b>starting</b> lineup this week — not raw projection. Uses your roster, scoring &amp; the superflex setting above.</div>
+            <textarea id="l-taken" placeholder="optional: players already rostered by others, one per line — excluded from suggestions" style="min-height:60px;margin-top:8px"></textarea>
+            <button class="go" id="l-fa-go" style="margin-top:8px">Find waiver upgrades</button>
+          </div>
         </div>
         <div class="card" id="l-out"><div class="empty"><div class="big">🏈</div>Build your roster and hit Optimize.<div class="hint" style="margin-top:8px">First run trains the model (~2 min).</div></div></div>
       </div>
@@ -342,10 +353,14 @@ function mountExplain(containerSel, kind, payload){
 fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } CFG.advice=!!c.advice; }).catch(()=>{});
 
 /* ============ LINEUP ============ */
-const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
+const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, superflex:false, roster:{QB:[],RB:[],WR:[],TE:[]}, opp:[] };
+// The canonical superflex lineup: standard starters + one QB-eligible flex slot.
+const SF_LINEUP = { starters:{QB:1,RB:2,WR:2,TE:1}, flex:1, superflex:1 };
+const lineupCfg = () => L.superflex ? SF_LINEUP : null;
 seg("l-scoring", v=>{ L.scoring=v; L.rules=null; PLAYERS=null; });
 const HINTS={ h2h:"Beat one opponent — balances floor and ceiling.", tournament:"Large field — maximize ceiling.", stack:"Best lineup around a QB game stack." };
 seg("l-mode", v=>{ L.mode=v; $("#l-oppwrap").style.display=v==="h2h"?"block":"none"; });
+$("#l-superflex").onclick=()=>{ L.superflex=!L.superflex; $("#l-superflex").classList.toggle("on",L.superflex); };
 $("#l-slate").onclick=()=>{ L.full=!L.full; $("#l-slate").classList.toggle("on",L.full);
   $("#roster-builder").style.opacity=L.full?.4:1; $("#roster-builder").style.pointerEvents=L.full?"none":"auto";
   $("#l-rhint").textContent=L.full?"Optimizing over every player on the slate (300+).":"Search each position to add players."; };
@@ -425,11 +440,31 @@ $("#l-go").onclick=async()=>{
   const btn=$("#l-go"); btn.disabled=true; btn.textContent="Optimizing…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting & optimizing…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
   const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules, projector:$("#l-proj").value,
-    mode:L.mode, roster, opponent:L.opp.join("\n"), full_slate:L.full, ceiling:0.9, stack_size:2, bringback:1 };
+    mode:L.mode, roster, opponent:L.opp.join("\n"), full_slate:L.full, ceiling:0.9, stack_size:2, bringback:1, lineup:lineupCfg() };
   try{ const d=await (await fetch("/api/optimize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderLineup(d); }
   catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
   btn.disabled=false; btn.textContent="Optimize my lineup";
 };
+$("#l-fa-go").onclick=async()=>{
+  const roster=["QB","RB","WR","TE"].flatMap(p=>L.roster[p]).join("\n");
+  if(!roster){ alert("Add your roster first — waiver value is measured against your starters."); return; }
+  const btn=$("#l-fa-go"); btn.disabled=true; btn.textContent="Finding…";
+  $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting the slate & ranking free agents…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
+  const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules,
+    projector:$("#l-proj").value, roster, exclude:$("#l-taken").value, lineup:lineupCfg(), n:15 };
+  try{ const d=await (await fetch("/api/freeagents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderFreeAgents(d); }
+  catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
+  btn.disabled=false; btn.textContent="Find waiver upgrades";
+};
+function renderFreeAgents(d){
+  const R=$("#l-out");
+  if(!d.ok){ R.innerHTML=`<div class="err"><b>Couldn't rank free agents.</b><br>${d.error||""}</div>`; return; }
+  if(!d.upgrades.length){ R.innerHTML=`<div class="empty"><div class="big">✅</div>No free agent upgrades your starting lineup.<div class="hint" style="margin-top:8px">Your ${d.starters}-man lineup projects ${d.starter_proj} pts.${d.missing&&d.missing.length?"<br>Unmatched roster: "+d.missing.join(", "):""}</div></div>`; return; }
+  const rows=d.upgrades.map(u=>`<tr class="pos-row"><td class="pname">${u.player}</td><td><span class="pos ${u.position}">${u.position}</span></td><td class="team">${u.team}</td><td class="num">${u.proj.toFixed(1)}</td><td class="num ev-pos">+${u.gain.toFixed(1)}</td><td style="color:var(--muted);font-size:12px">${u.replaces?"↳ benches "+u.replaces:"fills an open slot"}</td></tr>`).join("");
+  R.innerHTML=`<div class="headline"><div><div class="lab">Waiver upgrades</div><div class="val" style="font-size:20px">${d.upgrades.length} help your lineup</div></div><div class="sub">starters project ${d.starter_proj} pts</div></div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Player</th><th></th><th>Team</th><th class="num">Proj</th><th class="num">+ Pts</th><th>Effect</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="note">"+ Pts" is what each player adds to your <b>optimal starting lineup</b> this week — a bench-level projection that doesn't crack your starters shows no gain.${d.missing&&d.missing.length?"<br>Unmatched roster: "+d.missing.join(", "):""}</div>`;
+}
 function renderLineup(d){
   const R=$("#l-out");
   if(!d.ok){ R.innerHTML=`<div class="err"><b>Couldn't optimize.</b><br>${d.error||""}${d.missing&&d.missing.length?"<br><br>Unmatched: "+d.missing.join(", "):""}</div>`; return; }

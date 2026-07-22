@@ -288,3 +288,39 @@ def test_sleeper_import_endpoints(tmp_path, monkeypatch):
     # The import persisted both a saved league and a saved team.
     assert any(lg["name"] == "Home" for lg in c.get("/api/leagues").json()["leagues"])
     assert any(t["name"] == "Home" for t in c.get("/api/teams").json()["teams"])
+
+
+def test_freeagents_endpoint(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    board = pd.DataFrame({
+        "player_display_name": ["Josh Allen", "Bijan Robinson", "Breece Hall", "Jamarr Chase",
+                                "Puka Nacua", "Mike Evans", "Trey McBride",
+                                "Jalen Hurts", "Nico Collins"],
+        "position": ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "QB", "WR"],
+        "pred": [18.0, 15.0, 12.0, 14.0, 11.0, 7.0, 9.0, 25.0, 20.0],
+        "recent_team": ["BUF", "ATL", "NYJ", "CIN", "LAR", "TB", "ARI", "PHI", "HOU"],
+    })
+    # Skip the (heavy) model fit: _board returns (sim, board); we only use board.
+    monkeypatch.setattr(web, "_board", lambda *a, **k: (None, board))
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+    roster = "\n".join(["Josh Allen", "Bijan Robinson", "Breece Hall", "Jamarr Chase",
+                        "Puka Nacua", "Mike Evans", "Trey McBride"])
+
+    # 1-QB league: a spare QB only helps by upgrading the QB slot.
+    r = c.post("/api/freeagents", json={"season": 2099, "week": 5, "roster": roster}).json()
+    assert r["ok"] and r["starter_proj"] == 86.0
+    ups = {u["player"]: u for u in r["upgrades"]}
+    assert ups["Nico Collins"]["gain"] == 20.0          # fills empty FLEX
+    assert ups["Jalen Hurts"]["gain"] == 7.0            # 25 - 18, benches Josh Allen
+
+    # Superflex: the second QB now starts outright -> full value.
+    sf = c.post("/api/freeagents", json={"season": 2099, "week": 5, "roster": roster,
+        "lineup": {"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1, "superflex": 1}}).json()
+    assert {u["player"]: u for u in sf["upgrades"]}["Jalen Hurts"]["gain"] == 25.0
+
+    # An empty roster is rejected before any projection work.
+    assert c.post("/api/freeagents", json={"season": 2099, "week": 5}).json()["error"].startswith("Add your roster")

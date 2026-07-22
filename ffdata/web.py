@@ -27,7 +27,9 @@ from .features import build_features
 from .gamelines import game_forecasts
 from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
-from .optimize import LineupOptimizer, _assemble, _match, _norm
+from .optimize import (
+    LineupOptimizer, _assemble, _match, _norm, free_agent_advice, slots_from_lineup,
+)
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD, preset_name, rules_from, rules_to_dict
 from .sleeper import import_league, list_user_leagues
@@ -111,7 +113,8 @@ class OptRequest(BaseModel):
     ceiling: float = Field(0.90, ge=0.5, lt=1.0)
     stack_size: int = Field(2, ge=1, le=5)
     bringback: int = Field(1, ge=0, le=3)
-    rules: dict | None = None   # full custom scoring (from an imported league)
+    rules: dict | None = None    # full custom scoring (from an imported league)
+    lineup: dict | None = None   # {starters, flex, superflex} for superflex slots
 
 
 @app.get("/")
@@ -162,7 +165,8 @@ def optimize(req: OptRequest):
             return {"ok": False, "error": "None of your roster names matched the projection board.",
                     "missing": missing}
 
-    opt = LineupOptimizer(sim)
+    slots = slots_from_lineup(req.lineup)
+    opt = LineupOptimizer(sim, slots=slots)
     if req.mode == "tournament":
         res = opt.optimize_tournament(pool, quantile=req.ceiling)["optimal"]
         headline = {"label": f"{int(req.ceiling*100)}th-pct ceiling", "value": f"{res['ceiling']}",
@@ -178,7 +182,7 @@ def optimize(req: OptRequest):
     elif req.opponent.strip():
         opp, opp_missing = _match(_names(req.opponent), board)
         missing += [f"(opp) {m}" for m in opp_missing]
-        res = opt.optimize(pool, _assemble(opp))
+        res = opt.optimize(pool, _assemble(opp, slots))
         headline = {"label": "Win probability", "value": f"{res['optimal_win_prob']*100:.1f}%",
                     "sub": f"you {res['optimal_proj']} vs opp {res['opp_proj']}"}
         lineup, note = res["optimal_lineup"], "Optimized for win probability, not just points."
@@ -192,6 +196,39 @@ def optimize(req: OptRequest):
     return {"ok": True, "mode": req.mode, "headline": headline, "lineup": rows,
             "total": round(sum(r["pred"] for r in rows), 1), "note": note,
             "missing": missing, "pool_size": len(pool)}
+
+
+class FreeAgentRequest(BaseModel):
+    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    week: int = Field(ge=1, le=22)
+    scoring: str = "ppr"
+    projector: str = "gbm"
+    roster: str = ""             # your players, one name per line
+    exclude: str = ""            # players rostered by others (optional), one per line
+    rules: dict | None = None
+    lineup: dict | None = None   # {starters, flex, superflex} for superflex slots
+    n: int = Field(15, ge=1, le=50)
+
+
+@app.post("/api/freeagents")
+def api_freeagents(req: FreeAgentRequest):
+    """Rank available players by how much they'd upgrade your starting lineup."""
+    if req.projector not in ("gbm", "neural") or (req.scoring not in _RULES and not req.rules):
+        return {"ok": False, "error": "bad scoring or projector"}
+    roster = _names(req.roster)
+    if not roster:
+        return {"ok": False, "error": "Add your roster first (one player per line)."}
+    try:
+        _, board = _board(req.scoring, req.projector, req.season, req.week, req.rules)
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("free-agent board failed (%s)", req)
+        return {"ok": False, "error": "could not build projections (see server logs)"}
+    if board.empty:
+        return {"ok": False, "error": f"No projections for {req.season} week {req.week}."}
+    res = free_agent_advice(board, roster, slots=slots_from_lineup(req.lineup),
+                            exclude=_names(req.exclude), top=req.n)
+    matched, missing = _match(roster, board)
+    return {"ok": True, **res, "missing": missing, "roster_matched": len(matched)}
 
 
 class BoardRequest(BaseModel):

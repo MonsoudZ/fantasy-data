@@ -112,6 +112,19 @@ marginally, though (the +0.20 QB-receiver correlation is diluted across an
 opponent receivers — concentrating several correlations so the fat right tail
 survives. This is how real DFS optimizers enforce stack rules.
 
+**Superflex / 2-QB leagues.** The optimizer takes a lineup config, so a superflex
+slot (QB-eligible flex) is a first-class slot — a second QB can start when that's
+your best lineup. In the web UI it's a one-click **Superflex / 2-QB** toggle; a
+Sleeper import sets it automatically from the league's roster slots.
+
+**Waiver / free-agent finder.** On the lineup tab, "Find waiver upgrades" ranks
+available players by **how much they'd add to your starting lineup**, not raw
+projection — for each free agent it recomputes your optimal starters with him in
+and reports the point gain (naming whom he'd bench). A big projection that can't
+crack your starters shows no gain, which is the honest read for a season-long
+pickup. It's superflex-aware and honors your scoring; paste other managers'
+rosters into the optional box to exclude unavailable players.
+
 ## Draft
 
 ```bash
@@ -170,7 +183,10 @@ A polished, tabbed browser front-end over the whole toolkit:
 
 - **Lineup** — build your roster by position (QB/RB/WR/TE search, not typing),
   then optimize for win probability, tournament ceiling, or a stack. "Full slate"
-  optimizes over every player (DFS). Save your roster/scoring/model as a **team**.
+  optimizes over every player (DFS). A **Superflex / 2-QB** toggle adds a
+  QB-eligible flex slot so a second QB can start. The **waiver / free-agent
+  finder** ranks available players by how much they'd add to your *starting*
+  lineup (see below). Save your roster/scoring/model as a **team**.
 - **Draft board** — a live, VOR/auction-ranked board; click "Draft" to mark
   players gone and best-available updates instantly. Save the setup as a **league**.
   A **Redraft / Dynasty** toggle switches to multi-year, age-curve-adjusted values.

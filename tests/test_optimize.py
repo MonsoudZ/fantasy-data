@@ -3,7 +3,10 @@
 import numpy as np
 import pandas as pd
 
-from ffdata.optimize import LineupOptimizer, DEFAULT_SLOTS, _ELIGIBLE, _norm, _load_names, _match
+from ffdata.optimize import (
+    LineupOptimizer, DEFAULT_SLOTS, _ELIGIBLE, _norm, _load_names, _match,
+    free_agent_advice, slots_from_lineup,
+)
 
 
 class _FakeSampler:
@@ -127,6 +130,70 @@ def test_optimize_uses_the_joint_correlated_sampler_when_available():
     res = LineupOptimizer(_FakeSimCorr(), n_sims=100).optimize(pool, opp, correlated=True)
     assert len(res["optimal_lineup"]) == len(DEFAULT_SLOTS)
     assert 0.0 <= res["optimal_win_prob"] <= 1.0
+
+
+# --- superflex slots ---
+
+def test_slots_from_lineup_defaults_and_superflex():
+    assert slots_from_lineup(None) == DEFAULT_SLOTS
+    assert slots_from_lineup({"starters": {}, "flex": 0, "superflex": 0}) == DEFAULT_SLOTS
+    sf = slots_from_lineup({"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                            "flex": 1, "superflex": 1})
+    assert sf.count("SUPERFLEX") == 1 and sf.count("QB") == 1 and sf.count("FLEX") == 1
+    # A SUPERFLEX slot accepts a QB (that's the whole point of a 2-QB league).
+    assert "QB" in _ELIGIBLE["SUPERFLEX"]
+
+
+def test_superflex_slot_lets_a_second_qb_start():
+    opt = LineupOptimizer(_FakeSim(), slots=slots_from_lineup(
+        {"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1, "superflex": 1}), n_sims=50)
+    lineup = opt._greedy_points(_pool())
+    starters = [(s, n) for s, n, _, _ in lineup]
+    # Both QBs start: QB1 in the QB slot, QB2 taking SUPERFLEX (18 > any leftover flex option).
+    assert ("QB", "QB1") in starters and ("SUPERFLEX", "QB2") in starters
+
+
+# --- free-agent / waiver advice ---
+
+def _fa_board():
+    rows = [("Josh Allen", "QB", 18), ("Bijan Robinson", "RB", 15), ("Breece Hall", "RB", 12),
+            ("Jamarr Chase", "WR", 14), ("Puka Nacua", "WR", 11), ("Mike Evans", "WR", 7),
+            ("Trey McBride", "TE", 9),
+            ("Jalen Hurts", "QB", 25), ("Nico Collins", "WR", 20), ("Tank Bigsby", "RB", 6)]
+    return pd.DataFrame(rows, columns=["player_display_name", "position", "pred"])
+
+
+_MY = ["Josh Allen", "Bijan Robinson", "Breece Hall", "Jamarr Chase",
+       "Puka Nacua", "Mike Evans", "Trey McBride"]
+
+
+def test_free_agent_gain_is_marginal_lineup_improvement_not_raw_projection():
+    res = free_agent_advice(_fa_board(), _MY, slots=DEFAULT_SLOTS)
+    assert res["starter_proj"] == 86.0     # 7 starters, FLEX empty (roster is 7 players)
+    ups = {u["player"]: u for u in res["upgrades"]}
+    # Nico (WR 20) fills the empty FLEX -> full 20 gain, benches nobody.
+    assert ups["Nico Collins"]["gain"] == 20.0 and ups["Nico Collins"]["replaces"] is None
+    # In a 1-QB lineup a spare QB only helps by replacing the worse QB: 25 - 18 = 7.
+    assert ups["Jalen Hurts"]["gain"] == 7.0 and ups["Jalen Hurts"]["replaces"] == "Josh Allen"
+
+
+def test_free_agent_superflex_values_a_second_qb_fully():
+    sf = slots_from_lineup({"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                            "flex": 1, "superflex": 1})
+    res = free_agent_advice(_fa_board(), _MY, slots=sf)
+    ups = {u["player"]: u for u in res["upgrades"]}
+    # Now the second QB starts in SUPERFLEX -> full 25, benches nobody. This is the
+    # payoff of superflex-aware slots: the same QB was worth only +7 in 1-QB above.
+    assert ups["Jalen Hurts"]["gain"] == 25.0 and ups["Jalen Hurts"]["replaces"] is None
+
+
+def test_free_agent_excludes_rostered_and_own_players_and_ranks_by_gain():
+    res = free_agent_advice(_fa_board(), _MY, slots=DEFAULT_SLOTS, exclude=["Nico Collins"])
+    names = [u["player"] for u in res["upgrades"]]
+    assert "Nico Collins" not in names        # excluded (rostered elsewhere)
+    assert all(n not in _MY for n in names)    # never suggests your own players
+    gains = [u["gain"] for u in res["upgrades"]]
+    assert gains == sorted(gains, reverse=True)   # ranked best-first
 
 
 # --- CLI helpers ---
