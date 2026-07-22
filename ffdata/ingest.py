@@ -56,6 +56,19 @@ def current_nfl_season(today: dt.date | None = None) -> int:
     return today.year if today.month >= 9 else today.year - 1
 
 
+def upcoming_nfl_season(today: dt.date | None = None) -> int:
+    """The season you'd DRAFT for: the one in progress once games start, else the
+    one about to kick off.
+
+    `current_nfl_season` names the most recent season with games, which in the
+    offseason is the one already finished -- drafting against it would rank
+    players for a season that's already over.
+    """
+    today = today or dt.date.today()
+    cur = current_nfl_season(today)
+    return cur if today.month >= 9 else cur + 1
+
+
 def _download(url: str, retries: int = 3, backoff: float = 2.0) -> bytes:
     """Fetch bytes, retrying transient failures with exponential backoff.
 

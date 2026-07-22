@@ -351,7 +351,14 @@ function mountExplain(containerSel, kind, payload){
   const host=$(containerSel); if(host) host.appendChild(wrap);
 }
 
-fetch("/api/config").then(r=>r.json()).then(c=>{ if(c.season){ ["l-season","d-season","pr-season","g-season"].forEach(i=>$("#"+i).value=c.season); } CFG.advice=!!c.advice; }).catch(()=>{});
+fetch("/api/config").then(r=>r.json()).then(c=>{
+  // In-season views use the season with games; the draft tab targets the season
+  // you're drafting FOR (next one, in the offseason).
+  if(c.season){ ["l-season","pr-season","g-season"].forEach(i=>{ const e=$("#"+i); if(e) e.value=c.season; }); }
+  const ds = c.draft_season || c.season;
+  if(ds){ const e=$("#d-season"); if(e) e.value=ds; }
+  CFG.advice=!!c.advice;
+}).catch(()=>{});
 
 /* ============ LINEUP ============ */
 const ROSTER_POS = ["QB","RB","WR","TE","DEF","K"];

@@ -15,12 +15,18 @@ $PY -m pip install --quiet --upgrade pip
 $PY -m pip install --quiet -e ".[dev,web]"                     # core + tests/lint + web UI
 $PY -m pip install --quiet -e ".[neural]" || echo "   (torch skipped — optional neural model)"
 
-echo "==> Ingesting nflverse data (2019-2025 core + 2026 rosters)"
-$PY -m ffdata.cli --seasons 2019-2025                          # weekly/injuries/snaps/rosters/schedules
-$PY -m ffdata.cli --datasets rosters --seasons 2026            # preseason rosters for a 2026 draft
-# Optional extras (bigger / opt-in features):
-#   $PY -m ffdata.cli --pbp --seasons 2019-2025                # play-by-play (large)
-#   $PY -m ffdata.cli --datasets ngs_receiving ngs_passing ngs_rushing pfr_pass pfr_rec pfr_rush
+# Seasons are derived, not hardcoded, so this doesn't go stale each year.
+UPCOMING=$($PY -c "from ffdata.ingest import upcoming_nfl_season; print(upcoming_nfl_season())")
+
+echo "==> Ingesting nflverse data (through the last played season)"
+$PY -m ffdata.cli                          # every source except pbp: weekly/injuries/snaps/
+                                           # rosters/schedules/draft_picks/ngs/pfr
+echo "==> Ingesting ${UPCOMING} preseason data (for drafting)"
+# Only rosters exist before kickoff; schedules and draft_picks are all-years files
+# already refreshed above, so the upcoming season's games + rookie class come free.
+$PY -m ffdata.cli --datasets rosters --seasons "$UPCOMING"
+# Optional (large, and only used by opt-in features):
+#   $PY -m ffdata.cli --pbp
 
 echo "==> Sanity check"
 $PY -m pytest -q

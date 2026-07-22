@@ -64,3 +64,18 @@ def test_season_floor_and_rollover():
     import datetime as dt
     assert FIRST_SEASON == 2019
     assert current_nfl_season(dt.date(2025, 9, 1)) == 2025
+
+
+def test_upcoming_season_is_what_you_draft_for():
+    """In the offseason `current` is the season already finished -- drafting
+    against it would rank players for a season that's over."""
+    import datetime as dt
+
+    from ffdata.ingest import upcoming_nfl_season
+    # Offseason: last completed is 2025, but you draft for 2026.
+    assert current_nfl_season(dt.date(2026, 7, 21)) == 2025
+    assert upcoming_nfl_season(dt.date(2026, 7, 21)) == 2026
+    # Once games start, the season in progress is the one you're playing.
+    assert upcoming_nfl_season(dt.date(2026, 10, 1)) == 2026
+    # Just after a season ends, look ahead to the next one.
+    assert upcoming_nfl_season(dt.date(2027, 2, 15)) == 2027

@@ -105,9 +105,10 @@ def dynasty_board(target_season: int, years: int = 4, discount: float = 0.85,
 
 if __name__ == "__main__":
     import argparse
-    from .ingest import current_nfl_season
+    from .ingest import upcoming_nfl_season
     p = argparse.ArgumentParser(prog="python -m ffdata.dynasty", description="Dynasty value board")
-    p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--season", type=int, default=upcoming_nfl_season(),
+                   help="season to draft for (defaults to the upcoming season)")
     p.add_argument("--scoring", choices=list(_RULES), default="ppr")
     p.add_argument("--years", type=int, default=4, help="future seasons to value")
     p.add_argument("--discount", type=float, default=0.85)

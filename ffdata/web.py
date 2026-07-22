@@ -25,7 +25,7 @@ from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, tr
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
-from .ingest import FIRST_SEASON, current_nfl_season
+from .ingest import FIRST_SEASON, current_nfl_season, upcoming_nfl_season
 from .kdst import project_kdst
 from .matchup import MatchupSimulator
 from .optimize import (
@@ -132,7 +132,8 @@ def index():
 
 @app.get("/api/config")
 def config():
-    return {"season": current_nfl_season(), "advice": advice.available()}
+    return {"season": current_nfl_season(), "draft_season": upcoming_nfl_season(),
+            "advice": advice.available()}
 
 
 @app.post("/api/players")
@@ -241,7 +242,9 @@ def api_freeagents(req: FreeAgentRequest):
 
 class BoardRequest(BaseModel):
     """Shared draft-board config (draft board, keepers, and trades all use it)."""
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    # Drafting targets the UPCOMING season -- current_nfl_season() is the most
+    # recently *played* one, which in the offseason is already over.
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
     teams: int = Field(12, ge=2, le=32)
     scoring: str = "ppr"
     rules: dict | None = None    # full custom scoring (from an imported league)

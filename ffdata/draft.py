@@ -431,9 +431,10 @@ def backtest_rank(target_season: int, rules: ScoringRules = PPR, con=None) -> di
 
 if __name__ == "__main__":
     import argparse
-    from .ingest import current_nfl_season
+    from .ingest import upcoming_nfl_season
     p = argparse.ArgumentParser(prog="python -m ffdata.draft", description="Draft board / value rankings")
-    p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--season", type=int, default=upcoming_nfl_season(),
+                   help="season to draft for (defaults to the upcoming season)")
     p.add_argument("--scoring", choices=list(_RULES), default="ppr")
     p.add_argument("--position", choices=list(POSITIONS))
     p.add_argument("--drafted", default="", help="comma-separated already-drafted players")

@@ -87,9 +87,21 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 
 ## Data notes
 
-- `data/` and `.venv/` are gitignored. Seasons 2019-2025 for weekly/injuries/
-  snaps/rosters; schedules is one all-seasons file (1999-2026); 2026 rosters are
-  preseason (for drafting). `pbp` is opt-in and large.
+- `data/` and `.venv/` are gitignored. Per-season files (weekly/injuries/snaps/
+  rosters/pfr) exist only for **played** seasons; all-years files (schedules,
+  draft_picks, ngs) already cover the future. So the preseason lake is: played
+  seasons through `current_nfl_season()`, plus **rosters for the upcoming
+  season** — which is all a draft needs (the schedule and the rookie class come
+  from the all-years files). `scripts/setup.sh` derives both, so it never goes
+  stale. `pbp` is opt-in and large.
+- **`current_nfl_season()` vs `upcoming_nfl_season()`** (`ingest.py`): the first
+  is the most recently *played* season, the second is the one you **draft for**.
+  In the offseason they differ, so draft/dynasty CLIs and the draft board default
+  to *upcoming* — defaulting to `current` would rank players for a season that's
+  already over. In-season tools (lineup, props, game lines) use `current`.
+- `weekly` keeps skill positions **plus K** — `kdst.build_kicker` reads kickers
+  out of it, so filtering them at ingest silently kills kicker projections.
+  Team defense comes from `schedules`, not `weekly`.
 - Draft/dynasty values **honor any `ScoringRules`** (scored from raw stats via
   `scoring.score()`, same as the weekly path); default PPR. CLIs take
   `--scoring ppr|half|standard`; the API takes a `rules=` / `scoring` arg.
