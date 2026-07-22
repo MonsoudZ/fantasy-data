@@ -143,6 +143,14 @@
           <div class="seg" id="l-scoring">
             <button data-v="ppr" class="on">PPR</button><button data-v="half">Half</button><button data-v="standard">Standard</button>
           </div>
+          <label>Saved team</label>
+          <select id="l-team"><option value="">— new / unsaved —</option></select>
+          <div class="row" style="margin-top:8px">
+            <input type="text" id="l-teamname" placeholder="name to save as…" style="flex:1" />
+            <button type="button" id="l-tsave" class="draftbtn">Save</button>
+            <button type="button" id="l-tdel" class="draftbtn">Delete</button>
+          </div>
+          <div class="hint">Save keeps your roster, scoring, season &amp; model — week stays live.</div>
           <label>Mode</label>
           <div class="seg" id="l-mode">
             <button data-v="h2h" class="on">Head-to-head</button><button data-v="tournament">Tournament</button><button data-v="stack">Stack</button>
@@ -277,6 +285,39 @@ function renderOpp(){ $("#opp-chips").innerHTML=L.opp.map(n=>`<span class="chip"
 $("#opp-search").oninput=()=>pickerSearch($("#opp-search"), null, "opp-res");
 renderRoster();
 document.addEventListener("click",e=>{ if(!e.target.closest(".search")) document.querySelectorAll(".results").forEach(r=>r.classList.remove("show")); });
+
+/* ---- saved teams (lineup) ---- */
+let TEAMS=[];
+async function refreshTeams(select){
+  try{ TEAMS=(await (await fetch("/api/teams")).json()).teams||[]; }catch(e){ TEAMS=[]; }
+  const cur = select!==undefined ? select : $("#l-team").value;
+  $("#l-team").innerHTML = `<option value="">— new / unsaved —</option>` +
+    TEAMS.map(t=>`<option value="${t.name.replace(/"/g,'&quot;')}">${t.name} · ${t.scoring.toUpperCase()} · '${String(t.season).slice(2)}</option>`).join("");
+  if(cur) $("#l-team").value = cur;
+}
+$("#l-team").onchange=()=>{
+  const t = TEAMS.find(x=>x.name===$("#l-team").value); if(!t) return;
+  $("#l-season").value=t.season; $("#l-teamname").value=t.name; $("#l-proj").value=t.projector||"gbm";
+  document.querySelectorAll("#l-scoring button").forEach(b=>b.classList.toggle("on", b.dataset.v===t.scoring));
+  L.scoring=t.scoring;
+  L.roster={QB:[],RB:[],WR:[],TE:[]};
+  ["QB","RB","WR","TE"].forEach(p=>{ if(Array.isArray(t.roster&&t.roster[p])) L.roster[p]=t.roster[p].slice(); });
+  PLAYERS=null; renderRoster();
+};
+$("#l-tsave").onclick=async()=>{
+  const name=$("#l-teamname").value.trim(); if(!name){ $("#l-teamname").focus(); return; }
+  const body={ name, season:+$("#l-season").value, scoring:L.scoring, projector:$("#l-proj").value, roster:L.roster };
+  const r=await (await fetch("/api/teams",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+  if(!r.ok){ alert(r.error||"could not save team"); return; }
+  await refreshTeams(name);
+};
+$("#l-tdel").onclick=async()=>{
+  const name=$("#l-team").value||$("#l-teamname").value.trim(); if(!name) return;
+  if(!confirm(`Delete saved team “${name}”?`)) return;
+  await fetch("/api/teams/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+  $("#l-teamname").value=""; await refreshTeams("");
+};
+refreshTeams();
 
 $("#l-go").onclick=async()=>{
   const roster=["QB","RB","WR","TE"].flatMap(p=>L.roster[p]).join("\n");

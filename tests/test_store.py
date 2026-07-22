@@ -1,9 +1,10 @@
-"""Saved-league persistence store. Pure stdlib + a temp file -- runs in CI."""
+"""Saved-league / saved-team persistence store. Pure stdlib + a temp file -- CI-safe."""
 
 import pytest
 
 from ffdata.store import (
-    League, delete_league, get_league, list_leagues, save_league,
+    League, Team, delete_league, delete_team, get_league, get_team,
+    list_leagues, list_teams, save_league, save_team,
 )
 
 
@@ -65,3 +66,43 @@ def test_writes_are_atomic_no_tmp_left_behind(store):
     save_league(League(name="A", season=2025), path=store)
     # The temp sibling used for the atomic replace must not linger.
     assert not store.with_suffix(store.suffix + ".tmp").exists()
+
+
+# --- saved teams ---
+
+@pytest.fixture
+def teams(tmp_path):
+    return tmp_path / "teams.json"
+
+
+def test_team_roundtrips_and_normalizes_roster(teams):
+    save_team(Team(name="My Squad", season=2025, scoring="half", projector="neural",
+                   roster={"QB": ["Josh Allen"], "WR": ["Ja'Marr Chase", "A.J. Brown"]}),
+              path=teams)
+    got = get_team("my squad", path=teams)
+    assert got is not None and got.projector == "neural" and got.scoring == "half"
+    # Missing positions are filled in; only the four skill slots are kept.
+    assert set(got.roster) == {"QB", "RB", "WR", "TE"}
+    assert got.roster["QB"] == ["Josh Allen"] and got.roster["RB"] == []
+    assert got.roster["WR"] == ["Ja'Marr Chase", "A.J. Brown"]
+
+
+def test_team_listing_delete_and_isolation_from_leagues(teams, tmp_path):
+    save_team(Team(name="B", season=2025), path=teams)
+    save_team(Team(name="A", season=2025), path=teams)
+    assert [t.name for t in list_teams(path=teams)] == ["A", "B"]
+    # Teams live in their own file -- saving a team doesn't create leagues.
+    assert list_leagues(path=tmp_path / "leagues.json") == []
+    assert delete_team("a", path=teams) is True
+    assert [t.name for t in list_teams(path=teams)] == ["B"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"name": "", "season": 2025},                        # empty name
+    {"name": "x", "season": 2025, "scoring": "superflex"},
+    {"name": "x", "season": 2025, "projector": "quantum"},  # bad projector
+    {"name": "x", "season": 1800},
+])
+def test_team_validation_rejects_bad(teams, bad):
+    with pytest.raises(ValueError):
+        save_team(Team(**bad), path=teams)

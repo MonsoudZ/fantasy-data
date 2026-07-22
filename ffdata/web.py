@@ -27,7 +27,10 @@ from .matchup import MatchupSimulator
 from .optimize import LineupOptimizer, _assemble, _match
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD
-from .store import League, delete_league, list_leagues, save_league
+from .store import (
+    League, Team, delete_league, delete_team, list_leagues, list_teams,
+    save_league, save_team,
+)
 
 _log = logging.getLogger("ffdata.web")
 
@@ -282,6 +285,33 @@ def api_league_save(req: LeagueModel):
 @app.post("/api/leagues/delete")
 def api_league_delete(req: LeagueName):
     return {"ok": True, "deleted": delete_league(req.name)}
+
+
+class TeamModel(BaseModel):
+    name: str
+    season: int = Field(ge=1999, le=2100)
+    scoring: str = "ppr"
+    projector: str = "gbm"
+    roster: dict = Field(default_factory=lambda: {"QB": [], "RB": [], "WR": [], "TE": []})
+
+
+@app.get("/api/teams")
+def api_teams():
+    return {"ok": True, "teams": [asdict(t) for t in list_teams()]}
+
+
+@app.post("/api/teams")
+def api_team_save(req: TeamModel):
+    try:
+        t = save_team(Team(**req.model_dump()))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "team": asdict(t)}
+
+
+@app.post("/api/teams/delete")
+def api_team_delete(req: LeagueName):
+    return {"ok": True, "deleted": delete_team(req.name)}
 
 
 def main() -> None:

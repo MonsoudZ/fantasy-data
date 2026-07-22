@@ -91,3 +91,28 @@ def test_league_crud_via_api(tmp_path, monkeypatch):
 
     assert c.post("/api/leagues/delete", json={"name": "home"}).json()["deleted"] is True
     assert c.get("/api/leagues").json()["leagues"] == []
+
+
+def test_team_crud_via_api(tmp_path, monkeypatch):
+    # Teams live in teams.json beside the leagues file the state var points at.
+    monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    c = TestClient(app)
+
+    assert c.get("/api/teams").json() == {"ok": True, "teams": []}
+
+    saved = c.post("/api/teams", json={"name": "Squad", "season": 2025,
+                                       "scoring": "half", "projector": "neural",
+                                       "roster": {"QB": ["Josh Allen"]}}).json()
+    assert saved["ok"] and saved["team"]["projector"] == "neural"
+    assert saved["team"]["roster"]["QB"] == ["Josh Allen"]
+    assert saved["team"]["roster"]["RB"] == []          # normalized to 4 slots
+
+    assert len(c.get("/api/teams").json()["teams"]) == 1
+    assert c.post("/api/teams", json={"name": "Z", "season": 2025,
+                                      "projector": "quantum"}).json()["ok"] is False
+    assert c.post("/api/teams", json={"name": "W", "season": 3000}).status_code == 422
+    assert c.post("/api/teams/delete", json={"name": "squad"}).json()["deleted"] is True
+    assert c.get("/api/teams").json()["teams"] == []

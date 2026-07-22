@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 _SCORING = ("ppr", "half", "standard")
+_PROJECTORS = ("gbm", "neural")
+_POSITIONS = ("QB", "RB", "WR", "TE")
 
 
 @dataclass
@@ -49,10 +51,45 @@ class League:
         return self
 
 
+@dataclass
+class Team:
+    """A saved lineup team: your roster + how you want it projected.
+
+    The roster (by position) is stable week to week, so saving it once means you
+    don't re-add every player each visit. Week itself is deliberately NOT stored
+    -- it's the one thing that changes every time you open the tab.
+    """
+
+    name: str
+    season: int
+    scoring: str = "ppr"
+    projector: str = "gbm"
+    roster: dict = field(default_factory=lambda: {p: [] for p in _POSITIONS})
+
+    def validated(self) -> "Team":
+        if not str(self.name).strip():
+            raise ValueError("team name is required")
+        if self.scoring not in _SCORING:
+            raise ValueError(f"scoring must be one of {_SCORING}, got {self.scoring!r}")
+        if self.projector not in _PROJECTORS:
+            raise ValueError(f"projector must be one of {_PROJECTORS}, got {self.projector!r}")
+        if not (1999 <= int(self.season) <= 2100):
+            raise ValueError(f"season out of range: {self.season}")
+        # Normalize the roster to exactly the skill positions, lists of names.
+        src = self.roster if isinstance(self.roster, dict) else {}
+        self.roster = {p: [str(n) for n in src.get(p, []) or []] for p in _POSITIONS}
+        return self
+
+
 def default_path() -> Path:
     """Where leagues live by default; override with $FFDATA_STATE."""
     env = os.environ.get("FFDATA_STATE")
     return Path(env) if env else Path.home() / ".ff-data" / "leagues.json"
+
+
+def default_teams_path() -> Path:
+    """Where saved lineup teams live -- a sibling of the leagues file."""
+    return default_path().parent / "teams.json"
 
 
 def _load_raw(path: Path) -> dict[str, dict]:
@@ -107,6 +144,45 @@ def save_league(league: League, path: Path | None = None) -> League:
 def delete_league(name: str, path: Path | None = None) -> bool:
     """Remove a league; returns True if it existed."""
     path = path or default_path()
+    raw = _load_raw(path)
+    if _key(name) not in raw:
+        return False
+    del raw[_key(name)]
+    _write_raw(path, raw)
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Saved lineup teams (rosters) -- same JSON-CRUD shape as leagues.
+# --------------------------------------------------------------------------- #
+
+def list_teams(path: Path | None = None) -> list[Team]:
+    """All saved teams, ordered by name."""
+    path = path or default_teams_path()
+    raw = _load_raw(path)
+    return sorted((Team(**v) for v in raw.values()), key=lambda t: t.name.lower())
+
+
+def get_team(name: str, path: Path | None = None) -> Team | None:
+    """A saved team by name (case-insensitive), or None."""
+    path = path or default_teams_path()
+    row = _load_raw(path).get(_key(name))
+    return Team(**row) if row else None
+
+
+def save_team(team: Team, path: Path | None = None) -> Team:
+    """Create or overwrite a team (keyed by case-insensitive name)."""
+    path = path or default_teams_path()
+    team = team.validated()
+    raw = _load_raw(path)
+    raw[_key(team.name)] = asdict(team)
+    _write_raw(path, raw)
+    return team
+
+
+def delete_team(name: str, path: Path | None = None) -> bool:
+    """Remove a team; returns True if it existed."""
+    path = path or default_teams_path()
     raw = _load_raw(path)
     if _key(name) not in raw:
         return False
