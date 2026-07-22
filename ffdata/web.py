@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +22,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import advice
-from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, trade_value
+from .draft import (DEFAULT_LEAGUE, best_available, draft_board, keeper_value,
+                    rookie_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -320,10 +322,40 @@ def api_draft(req: DraftRequest):
     if err:
         return err
     avail = best_available(board, req.drafted, req.position or None, req.n)
-    players = [{"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
-                "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
-               for _, r in avail.iterrows()]
+    ctx = _rookie_ctx(req.season)
+    players = []
+    for _, r in avail.iterrows():
+        row = {"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
+               "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
+        # Rookies carry situation context -- the projection only knows draft
+        # capital, so the room they land in is the drafter's call to weigh.
+        if r["player"] in ctx:
+            row["rookie"] = ctx[r["player"]]
+        players.append(row)
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
+
+
+@lru_cache(maxsize=8)
+def _rookie_ctx(season: int) -> dict:
+    """player -> opportunity context (vacated, who blocks him, depth, pass rate)."""
+    try:
+        c = rookie_context(season)
+    except Exception:  # noqa: BLE001 - context is a bonus, never fatal
+        return {}
+    if c is None or c.empty:
+        return {}
+    out = {}
+    for _, r in c.iterrows():
+        out[r["player"]] = {
+            "pick": int(r["pick"]),
+            "team": r["team"],
+            "vacated": float(r["vacated_fp"]),
+            "blocked_by": (None if pd.isna(r["blocked_by"]) else str(r["blocked_by"])),
+            "blocked_by_fp": float(r["blocked_by_fp"]),
+            "depth": (None if pd.isna(r["depth_rank"]) else int(r["depth_rank"])),
+            "pass_rate": (None if pd.isna(r["pass_rate"]) else float(r["pass_rate"])),
+        }
+    return out
 
 
 def _keeper_pairs(keepers: list) -> list[tuple[str, float]]:

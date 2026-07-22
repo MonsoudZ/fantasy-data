@@ -117,6 +117,12 @@
   td { padding:9px 10px; border-bottom:1px solid rgba(42,55,99,.4); }
   td.num { font-variant-numeric:tabular-nums; font-weight:700; text-align:right; }
   tr.pos-row:hover { background:var(--card2); }
+  .rk-badge { font-size:9px; font-weight:800; letter-spacing:.3px; color:#08122a;
+    background:var(--accent2); border-radius:5px; padding:2px 5px; margin-left:6px; vertical-align:middle; }
+  .rk-row td { border-bottom:0; padding-top:0; padding-bottom:9px; }
+  .rk-ctx { font-size:11.5px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; }
+  .rk-ctx b { color:var(--text); font-weight:700; }
+  .rk-good { color:var(--good); font-weight:700; } .rk-bad { color:var(--warn); font-weight:700; }
   .draftbtn { border:1px solid var(--line); background:#0e1530; color:var(--accent2); font-weight:700;
     font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer; }
   .draftbtn:hover { background:var(--accent); color:#fff; border-color:transparent; }
@@ -520,8 +526,25 @@ function renderBoard(){
   const cells=p=>dyn
     ? `<td class="num">${p.age}</td><td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num" style="color:var(--good)">${p.dynasty_value.toFixed(0)}</td>`
     : `<td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td>`;
+  const ncols = dyn ? 8 : 7;
+  // Rookies get a second row: the situation the projection can't see. Draft
+  // capital is all the model knows, so show who's ahead and whether the offense
+  // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
+  // rookie buried behind a star on a run-first team, at the same draft pick.
+  const rkRow = p => {
+    const r = p.rookie; if(!r) return "";
+    const blocked = r.blocked_by
+      ? `behind <b>${r.blocked_by}</b> (${r.blocked_by_fp.toFixed(0)} pts)` : "clear depth chart";
+    const depth = r.depth!=null ? `<span class="${r.depth===1?'rk-good':'rk-bad'}">DC${r.depth}</span>` : "";
+    const pass = r.pass_rate!=null
+      ? `<span class="${r.pass_rate>=0.58?'rk-good':(r.pass_rate<=0.53?'rk-bad':'')}">${(r.pass_rate*100).toFixed(0)}% pass</span>` : "";
+    return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">
+      <span>${r.team} · pick ${r.pick}</span><span>${blocked}</span>
+      <span><b>${r.vacated.toFixed(0)}</b> pts vacated</span>${depth?`<span>${depth}</span>`:""}${pass?`<span>${pass}</span>`:""}
+    </div></td></tr>`;
+  };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+rkRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";

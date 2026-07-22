@@ -288,11 +288,47 @@ def rookie_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
            .groupby(["team", "position"], as_index=False)
            .agg(vacated_fp=("gone", "sum"), returning_fp=("back", "sum")))
 
-    out = rooks.merge(ctx, on=["team", "position"], how="left")
+    # WHO is still standing in front of him. A summed "returning" number can't
+    # tell an entrenched star from three replaceable bodies -- and that is the
+    # difference between a rookie who starts and one who redshirts.
+    staying = prior[prior["stays"]].sort_values("fp", ascending=False)
+    blocker = (staying.groupby(["team", "position"], as_index=False)
+               .agg(blocked_by_id=("player_id", "first"), blocked_by_fp=("fp", "first")))
+    names = agg.sort_values("season").groupby("player_id")["player"].last()
+
+    out = rooks.merge(ctx, on=["team", "position"], how="left") \
+               .merge(blocker, on=["team", "position"], how="left")
     out[["vacated_fp", "returning_fp"]] = out[["vacated_fp", "returning_fp"]].fillna(0.0).round(1)
+    out["blocked_by"] = out["blocked_by_id"].map(names)
+    out["blocked_by_fp"] = out["blocked_by_fp"].fillna(0.0).round(1)
     out["depth_rank"] = out["player_id"].map(_depth_rank(con, target_season))
-    cols = ["player", "position", "team", "pick", "vacated_fp", "returning_fp", "depth_rank"]
+    # Does this offense even throw? A run-heavy team caps every receiver in the
+    # room no matter how much production left.
+    out = out.merge(_team_pass_rate(con, target_season - 1), on="team", how="left")
+    cols = ["player", "position", "team", "pick", "vacated_fp", "returning_fp",
+            "blocked_by", "blocked_by_fp", "depth_rank", "pass_rate"]
     return out[cols].sort_values("pick").reset_index(drop=True)
+
+
+def _team_pass_rate(con, season: int) -> pd.DataFrame:
+    """Team pass share of offensive plays in `season` (pass att / (pass + rush)).
+
+    Scheme sets the ceiling: a rookie receiver on a run-first offense competes
+    for a smaller pie than the raw vacated-production number suggests.
+    """
+    try:
+        df = con.sql(f"""
+            select recent_team as team,
+                   sum(coalesce(attempts, 0)) as pass_att,
+                   sum(coalesce(carries, 0)) as rush_att
+            from weekly where season = {int(season)} and season_type = 'REG'
+            group by recent_team
+        """).df()
+    except Exception:  # noqa: BLE001 - no lake -> no scheme context
+        return pd.DataFrame(columns=["team", "pass_rate"])
+    total = df["pass_att"] + df["rush_att"]
+    df["pass_rate"] = (df["pass_att"] / total.where(total > 0)).round(3)
+    return df[["team", "pass_rate"]]
 
 
 def _depth_rank(con, season: int) -> dict:

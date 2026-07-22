@@ -124,8 +124,13 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   (vacated +0.14, returning −0.09 vs **pick +0.62**), teams already draft partly
   for need (QB +0.31, TE +0.23 corr between vacated share and an earlier pick),
   and ~350 training rookies can't afford the variance. So it's surfaced for a
-  human to weigh — e.g. 2026: Carnell Tate (pick 4) has 82 vacated / 308
-  returning, while Makai Lemon (pick 20) has 273 vacated.
+  human to weigh, and shown under each rookie on the draft-board UI (an `R`
+  badge plus a situation line). Summed vacated points alone mislead, so the
+  context names **who is still ahead of him**, his **depth-chart rank**, and the
+  team's **pass rate** — scheme caps the pie. 2026 is the case in point: Makai
+  Lemon (pick 20) has 273 vacated but sits behind DeVonta Smith at DC2 on a 51%-
+  pass offense, while Carnell Tate (pick 4) has only 83 vacated yet is already
+  DC1 on a 60%-pass team. The raw number says Lemon; the situation says Tate.
 - `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
   rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
   teams silently lose all team context.
