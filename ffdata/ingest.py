@@ -82,6 +82,23 @@ def upcoming_nfl_season(today: dt.date | None = None) -> int:
     return cur if today.month >= 9 else cur + 1
 
 
+def season_not_started(season: int, today: dt.date | None = None) -> bool:
+    """True when `season` has no played games yet.
+
+    `weekly`, `injuries` and `snap_counts` only exist for seasons that have been
+    PLAYED, so every weekly tool is dark until Week 1 is in the books. Callers use
+    this to say so plainly instead of failing on an empty frame -- or, worse,
+    quietly serving last season's numbers under this season's label.
+    """
+    return season > current_nfl_season(today)
+
+
+NOT_STARTED_HINT = (
+    "Weekly projections need games that have been played. Draft, keepers, "
+    "trades, dynasty and game lines all work in the offseason."
+)
+
+
 def _download(url: str, retries: int = 3, backoff: float = 2.0) -> bytes:
     """Fetch bytes, retrying transient failures with exponential backoff.
 

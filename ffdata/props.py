@@ -135,16 +135,20 @@ def calibrate(feats: pd.DataFrame, market: str, pool_season: int, eval_season: i
 
 def main() -> None:
     import argparse
-    from .ingest import current_nfl_season
+    from .ingest import NOT_STARTED_HINT, season_not_started, upcoming_nfl_season
 
     p = argparse.ArgumentParser(prog="python -m ffdata.props",
                                 description="Player-props edge finder (you supply the lines).")
     p.add_argument("--week", type=int, required=True)
-    p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--season", type=int, default=upcoming_nfl_season())
     p.add_argument("--props", required=True,
                    help="CSV: player,market,line,over_odds,under_odds")
     p.add_argument("--min-ev", type=float, default=0.0, help="minimum EV per 1u to show")
     args = p.parse_args()
+
+    # Weekly tools need played games; say so rather than dying on an empty frame.
+    if season_not_started(args.season):
+        raise SystemExit(f"The {args.season} season hasn't kicked off yet. {NOT_STARTED_HINT}")
 
     prop_df = pd.read_csv(args.props)
     print(f"Pricing {len(prop_df)} props for {args.season} week {args.week}...", flush=True)

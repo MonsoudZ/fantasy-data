@@ -13,6 +13,13 @@ pytest.importorskip("fastapi")
 from conftest import requires_data_lake  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
+from ffdata.ingest import current_nfl_season  # noqa: E402
+
+# A season that has actually been PLAYED. These tests monkeypatch the projection
+# board, so the value only has to clear the "season hasn't kicked off" guard --
+# derived, not a literal, so it can't go stale (see matchup.fit_seasons).
+_PLAYED = current_nfl_season()
+
 from ffdata.web import (  # noqa: E402
     DraftRequest, OptRequest, PropsRequest, _cache_put, _MAX_CACHE, _parse_props,
 )
@@ -173,28 +180,28 @@ def test_keepers_and_trades_endpoints(monkeypatch):
     c = TestClient(web.app)
 
     # Keepers: surplus = auction value - cost.
-    r = c.post("/api/keepers", json={"season": 2099, "teams": 12,
+    r = c.post("/api/keepers", json={"season": _PLAYED, "teams": 12,
                                      "keepers": [["Ja'Marr Chase", 40], ["Josh Allen", 5]]}).json()
     assert r["ok"]
     ks = {k["player"]: k for k in r["keepers"]}
     assert ks["Ja'Marr Chase"]["surplus"] == 15      # 55 - 40
     assert ks["Josh Allen"]["surplus"] == 15         # 20 - 5
 
-    assert c.post("/api/keepers", json={"season": 2099, "keepers": []}).json()["error"].startswith("No valid")
-    assert c.post("/api/keepers", json={"season": 2099, "scoring": "nope",
+    assert c.post("/api/keepers", json={"season": _PLAYED, "keepers": []}).json()["error"].startswith("No valid")
+    assert c.post("/api/keepers", json={"season": _PLAYED, "scoring": "nope",
                                         "keepers": [["x", 1]]}).json()["error"] == "bad scoring"
 
     # Trade: totals per side + a verdict (diff beyond the "roughly even" band).
-    t = c.post("/api/trade", json={"season": 2099, "teams": 12,
+    t = c.post("/api/trade", json={"season": _PLAYED, "teams": 12,
                                    "side_a": ["Ja'Marr Chase"], "side_b": ["Josh Allen"]}).json()
     assert t["ok"]
     assert t["side_a"]["auction"] == 55 and t["side_b"]["auction"] == 20
     assert t["diff"] == 35 and "Side A" in t["verdict"]
     # Close values fall in the even band.
-    even = c.post("/api/trade", json={"season": 2099, "side_a": ["Ja'Marr Chase"],
+    even = c.post("/api/trade", json={"season": _PLAYED, "side_a": ["Ja'Marr Chase"],
                                       "side_b": ["Bijan Robinson"]}).json()
     assert even["verdict"] == "roughly even"      # 55 vs 50, within $5
-    assert c.post("/api/trade", json={"season": 2099}).json()["error"].startswith("Add players")
+    assert c.post("/api/trade", json={"season": _PLAYED}).json()["error"].startswith("Add players")
 
 
 def test_compare_endpoint(monkeypatch):
@@ -214,14 +221,14 @@ def test_compare_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
     c = TestClient(web.app)
 
-    r = c.post("/api/compare", json={"season": 2099,
+    r = c.post("/api/compare", json={"season": _PLAYED,
                                      "players": ["Ja'Marr Chase", "CeeDee Lamb", "Josh Allen"]}).json()
     assert r["ok"]
     by = {p["player"]: p for p in r["players"]}
     assert by["Ja'Marr Chase"]["overall_rank"] == 1 and by["Ja'Marr Chase"]["position_rank"] == 1
     assert by["CeeDee Lamb"]["overall_rank"] == 4 and by["CeeDee Lamb"]["position_rank"] == 2  # WR2
     assert r["best_value"] == "Ja'Marr Chase"           # highest VOR
-    assert c.post("/api/compare", json={"season": 2099,
+    assert c.post("/api/compare", json={"season": _PLAYED,
                                         "players": ["Josh Allen"]}).json()["error"].startswith("Pick at least")
 
 
@@ -242,9 +249,9 @@ def test_games_endpoint(monkeypatch):
 
     from fastapi.testclient import TestClient
     c = TestClient(web.app)
-    r = c.post("/api/games", json={"season": 2099, "week": 15}).json()
+    r = c.post("/api/games", json={"season": _PLAYED, "week": 15}).json()
     assert r["ok"] and r["games"][0]["total_lean"] == "over" and r["games"][0]["ml_lean"] == "KC"
-    assert c.post("/api/games", json={"season": 2099, "week": 99}).status_code == 422
+    assert c.post("/api/games", json={"season": _PLAYED, "week": 99}).status_code == 422
 
 
 def test_dynasty_endpoint(monkeypatch):
@@ -262,14 +269,14 @@ def test_dynasty_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
     c = TestClient(web.app)
 
-    r = c.post("/api/dynasty", json={"season": 2099, "teams": 12, "years": 4}).json()
+    r = c.post("/api/dynasty", json={"season": _PLAYED, "teams": 12, "years": 4}).json()
     assert r["ok"] and r["players"][0]["dynasty_value"] == 180.0
     assert r["players"][0]["age"] == 24
     # drafted filter applies
-    r2 = c.post("/api/dynasty", json={"season": 2099, "drafted": ["Young Stud"]}).json()
+    r2 = c.post("/api/dynasty", json={"season": _PLAYED, "drafted": ["Young Stud"]}).json()
     assert all(p["player"] != "Young Stud" for p in r2["players"])
     # out-of-range knobs rejected by pydantic
-    assert c.post("/api/dynasty", json={"season": 2099, "years": 99}).status_code == 422
+    assert c.post("/api/dynasty", json={"season": _PLAYED, "years": 99}).status_code == 422
 
 
 def test_sleeper_import_endpoints(tmp_path, monkeypatch):
@@ -325,19 +332,19 @@ def test_freeagents_endpoint(monkeypatch):
                         "Puka Nacua", "Mike Evans", "Trey McBride"])
 
     # 1-QB league: a spare QB only helps by upgrading the QB slot.
-    r = c.post("/api/freeagents", json={"season": 2099, "week": 5, "roster": roster}).json()
+    r = c.post("/api/freeagents", json={"season": _PLAYED, "week": 5, "roster": roster}).json()
     assert r["ok"] and r["starter_proj"] == 86.0
     ups = {u["player"]: u for u in r["upgrades"]}
     assert ups["Nico Collins"]["gain"] == 20.0          # fills empty FLEX
     assert ups["Jalen Hurts"]["gain"] == 7.0            # 25 - 18, benches Josh Allen
 
     # Superflex: the second QB now starts outright -> full value.
-    sf = c.post("/api/freeagents", json={"season": 2099, "week": 5, "roster": roster,
+    sf = c.post("/api/freeagents", json={"season": _PLAYED, "week": 5, "roster": roster,
         "lineup": {"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1, "superflex": 1}}).json()
     assert {u["player"]: u for u in sf["upgrades"]}["Jalen Hurts"]["gain"] == 25.0
 
     # An empty roster is rejected before any projection work.
-    assert c.post("/api/freeagents", json={"season": 2099, "week": 5}).json()["error"].startswith("Add your roster")
+    assert c.post("/api/freeagents", json={"season": _PLAYED, "week": 5}).json()["error"].startswith("Add your roster")
 
 
 def test_optimize_fills_defense_and_kicker_slots(monkeypatch):
@@ -359,7 +366,7 @@ def test_optimize_fills_defense_and_kicker_slots(monkeypatch):
     c = TestClient(web.app)
     roster = "\n".join(board["player_display_name"])
     r = c.post("/api/optimize", json={
-        "season": 2099, "week": 5, "roster": roster,
+        "season": _PLAYED, "week": 5, "roster": roster,
         "lineup": {"starters": {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DEF": 1},
                    "flex": 1, "superflex": 0}}).json()
     assert r["ok"]
@@ -402,3 +409,46 @@ def test_names_endpoint_returns_the_whole_board_for_the_pickers():
     # Sorted by value, so a picker's first hits are the players you'd actually want.
     vors = [p["vor"] for p in d["players"]]
     assert vors == sorted(vors, reverse=True)
+
+
+def test_config_exposes_one_season_for_the_whole_ui():
+    """There is deliberately no season picker: earlier seasons are training data,
+    never something the user selects. Showing last year's number beside this
+    year's advice is how you draft for a season that already happened."""
+    from fastapi.testclient import TestClient
+
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.web import app
+    c = TestClient(app).get("/api/config").json()
+    assert c["season"] == upcoming_nfl_season()
+    assert c["draft_season"] == c["season"], "draft and in-season views must agree"
+    assert c["started"] is (c["season"] <= current_nfl_season())
+
+
+@pytest.mark.parametrize("path,body", [
+    ("/api/players", {"week": 5}),
+    ("/api/optimize", {"week": 5, "roster": "Josh Allen"}),
+    ("/api/freeagents", {"week": 5, "roster": "Josh Allen"}),
+    ("/api/props", {"week": 5, "lines": "Josh Allen,passing_yards,250,-110,-110"}),
+])
+def test_weekly_tools_say_the_season_has_not_started(path, body):
+    """Before Week 1 exists there are no weekly stats. Say so, rather than dying
+    on an empty frame or quietly serving last season under this season's label."""
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    r = TestClient(app).post(path, json={**body, "season": current_nfl_season() + 3}).json()
+    assert r["ok"] is False
+    assert r["not_started"] is True
+    assert "hasn't kicked off" in r["error"]
+
+
+def test_season_not_started_predicate():
+    import datetime as dt
+
+    from ffdata.ingest import season_not_started
+    july = dt.date(2026, 7, 22)      # offseason: 2025 is the last played season
+    assert season_not_started(2026, july) is True
+    assert season_not_started(2025, july) is False
+    september = dt.date(2026, 9, 20)  # 2026 is under way
+    assert season_not_started(2026, september) is False

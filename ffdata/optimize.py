@@ -430,7 +430,7 @@ def _print_lineup(title: str, lineup, board: pd.DataFrame) -> None:
 
 def main() -> None:
     import argparse
-    from .ingest import current_nfl_season
+    from .ingest import NOT_STARTED_HINT, season_not_started, upcoming_nfl_season
     from .matchup import MatchupSimulator
     from .scoring import PPR, HALF_PPR, STANDARD
 
@@ -438,7 +438,7 @@ def main() -> None:
         prog="python -m ffdata.optimize",
         description="Weekly lineup optimizer (head-to-head win prob or tournament ceiling).")
     p.add_argument("--week", type=int, required=True, help="NFL week to optimize")
-    p.add_argument("--season", type=int, default=current_nfl_season())
+    p.add_argument("--season", type=int, default=upcoming_nfl_season())
     p.add_argument("--roster", required=True,
                    help="your available players: CSV/txt, one name per line")
     p.add_argument("--mode", choices=["h2h", "tournament", "stack"], default="h2h",
@@ -457,6 +457,10 @@ def main() -> None:
                    help="gbm is fast; neural is most accurate but slower")
     p.add_argument("--n-sims", type=int, default=20000)
     args = p.parse_args()
+
+    # Weekly tools need played games; say so rather than dying on an empty frame.
+    if season_not_started(args.season):
+        raise SystemExit(f"The {args.season} season hasn't kicked off yet. {NOT_STARTED_HINT}")
 
     rules = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}[args.scoring]
     print(f"Projecting {args.season} week {args.week} "

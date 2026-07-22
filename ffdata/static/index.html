@@ -215,6 +215,7 @@
 
           <label>Projection model</label>
           <select id="l-proj"><option value="gbm">Fast (gradient boosting)</option><option value="neural">Most accurate (neural)</option></select>
+          <div id="l-pre"></div>
           <button class="go" id="l-go">Optimize my lineup</button>
 
           <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
@@ -316,6 +317,7 @@
             <div id="pr-build"></div>
             <textarea id="pr-lines" style="display:none" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105"></textarea>
             <div class="hint">Search a player, pick his market, type the line and the two prices. You bring the odds.</div>
+            <div id="pr-pre"></div>
             <button class="go" id="pr-go">Find +EV edges</button>
           </div>
           <div class="card" id="pr-out"><div class="empty"><div class="big">📈</div>Paste prop lines and find your edges.<div class="hint" style="margin-top:8px">First run trains per-stat models (~2 min).</div></div></div>
@@ -386,14 +388,30 @@ function mountExplain(containerSel, kind, payload){
 }
 
 fetch("/api/config").then(r=>r.json()).then(c=>{
-  // In-season views use the season with games; the draft tab targets the season
-  // you're drafting FOR (next one, in the offseason).
-  if(c.season){ ["l-season","pr-season","g-season"].forEach(i=>{ const e=$("#"+i); if(e) e.value=c.season; }); }
-  const ds = c.draft_season || c.season;
-  if(ds){ const e=$("#d-season"); if(e) e.value=ds; }
-  CFG.season = ds;                       // injury notes cite the season BEFORE this
-  CFG.advice=!!c.advice;
+  // ONE season across the whole app: the one being played, or drafted for. Every
+  // earlier season is training data the models read, never something you pick --
+  // showing last year's number beside this year's advice is how you end up
+  // drafting for a season that already happened.
+  if(c.season){ ["l-season","pr-season","g-season","d-season"].forEach(i=>{
+    const e=$("#"+i); if(e) e.value=c.season; }); }
+  CFG.season = c.season;                 // injury notes cite the season BEFORE this
+  CFG.started = c.started !== false;
+  CFG.advice = !!c.advice;
+  if(!CFG.started) markPreseason();
 }).catch(()=>{});
+
+/* Before Week 1 exists there are no weekly stats to project, so the two
+   in-season tabs say so up front instead of failing when you press the button. */
+function markPreseason(){
+  const note = `<div class="warn" style="margin-bottom:12px">
+    <b>${CFG.season} hasn't kicked off.</b> Weekly projections need games that have
+    been played, so lineup and props open in September. Everything for your draft —
+    board, keepers, trades, dynasty, rookies — is live now, and game lines already
+    have ${CFG.season} spreads and totals.</div>`;
+  ["l-pre","pr-pre"].forEach(id => { const e=$("#"+id); if(e) e.innerHTML = note; });
+  ["#l-go","#l-fa-go","#pr-go"].forEach(sel => {
+    const b=document.querySelector(sel); if(b) b.disabled = true; });
+}
 
 /* ============ LINEUP ============ */
 const ROSTER_POS = ["QB","RB","WR","TE","DEF","K"];

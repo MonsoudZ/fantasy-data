@@ -27,7 +27,8 @@ from .draft import (DEFAULT_LEAGUE, best_available, draft_board, keeper_value,
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
-from .ingest import FIRST_SEASON, current_nfl_season, upcoming_nfl_season
+from .ingest import (FIRST_SEASON, NOT_STARTED_HINT, current_nfl_season,
+                     season_not_started, upcoming_nfl_season)
 from .kdst import project_kdst
 from .matchup import MatchupSimulator
 from .optimize import (
@@ -112,7 +113,7 @@ app = FastAPI(title="ff-data lineup optimizer")
 
 
 class OptRequest(BaseModel):
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
     week: int = Field(ge=1, le=22)
     scoring: str = "ppr"
     projector: str = "gbm"
@@ -134,13 +135,36 @@ def index():
 
 @app.get("/api/config")
 def config():
-    return {"season": current_nfl_season(), "draft_season": upcoming_nfl_season(),
-            "advice": advice.available()}
+    """One season for the entire UI: the one being played, or drafted for.
+
+    There is deliberately no season picker anywhere. Earlier seasons are training
+    data the models read; they are never something the user selects, and showing
+    last year's number next to this year's advice is how you end up drafting for
+    a season that already happened.
+    """
+    season = upcoming_nfl_season()
+    return {"season": season, "draft_season": season,
+            "started": season <= current_nfl_season(), "advice": advice.available()}
+
+
+def _not_started(season: int) -> dict | None:
+    """The honest answer for weekly tools before Week 1 exists.
+
+    `weekly`/`injuries`/`snap_counts` only exist for seasons that have been
+    PLAYED, so in the offseason there is nothing to project. Say that plainly
+    rather than silently serving last season's numbers under this season's label.
+    """
+    if not season_not_started(season):
+        return None
+    return {"ok": False, "not_started": True,
+            "error": f"The {season} season hasn't kicked off yet. {NOT_STARTED_HINT}"}
 
 
 @app.post("/api/players")
 def players(req: OptRequest):
     """The full projection board for a week -- every projectable player."""
+    if (msg := _not_started(req.season)):
+        return msg
     try:
         _, board = _board(req.scoring, req.projector, req.season, req.week, req.rules)
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
@@ -158,6 +182,8 @@ def players(req: OptRequest):
 def optimize(req: OptRequest):
     if req.projector not in ("gbm", "neural") or (req.scoring not in _RULES and not req.rules):
         return {"ok": False, "error": "bad scoring or projector"}
+    if (msg := _not_started(req.season)):
+        return msg
     try:
         sim, board = _board(req.scoring, req.projector, req.season, req.week, req.rules)
     except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
@@ -210,7 +236,7 @@ def optimize(req: OptRequest):
 
 
 class FreeAgentRequest(BaseModel):
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
     week: int = Field(ge=1, le=22)
     scoring: str = "ppr"
     projector: str = "gbm"
@@ -226,6 +252,8 @@ def api_freeagents(req: FreeAgentRequest):
     """Rank available players by how much they'd upgrade your starting lineup."""
     if req.projector not in ("gbm", "neural") or (req.scoring not in _RULES and not req.rules):
         return {"ok": False, "error": "bad scoring or projector"}
+    if (msg := _not_started(req.season)):
+        return msg
     roster = _names(req.roster)
     if not roster:
         return {"ok": False, "error": "Add your roster first (one player per line)."}
@@ -634,7 +662,7 @@ def api_dynasty(req: DynastyRequest):
 
 
 class GamesRequest(BaseModel):
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
     week: int = Field(ge=1, le=22)
 
 
@@ -656,7 +684,7 @@ def api_games(req: GamesRequest):
 
 
 class PropsRequest(BaseModel):
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
     week: int = Field(ge=1, le=22)
     lines: str = ""
 
@@ -679,6 +707,8 @@ def _parse_props(text: str) -> pd.DataFrame:
 
 @app.post("/api/props")
 def api_props(req: PropsRequest):
+    if (msg := _not_started(req.season)):
+        return msg
     prop_df = _parse_props(req.lines)
     if prop_df.empty:
         return {"ok": False, "error": "No valid prop lines. Format: player,market,line,over_odds,under_odds"}
@@ -767,13 +797,13 @@ def api_team_delete(req: LeagueName):
 
 class SleeperUser(BaseModel):
     username: str
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
 
 
 class SleeperImport(BaseModel):
     league_id: str
     username: str
-    season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
+    season: int = Field(default_factory=upcoming_nfl_season, ge=1999, le=2100)
 
 
 @app.post("/api/import/sleeper/leagues")

@@ -105,9 +105,29 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   stale. `pbp` is opt-in and large.
 - **`current_nfl_season()` vs `upcoming_nfl_season()`** (`ingest.py`): the first
   is the most recently *played* season, the second is the one you **draft for**.
-  In the offseason they differ, so draft/dynasty CLIs and the draft board default
-  to *upcoming* — defaulting to `current` would rank players for a season that's
-  already over. In-season tools (lineup, props, game lines) use `current`.
+  In the offseason they differ. `current` is a **backend** concept — how far the
+  played-data lake reaches — and must never surface in the UI.
+- **One season, everywhere user-facing.** Every UI field, every API default and
+  every user-facing CLI uses `upcoming_nfl_season()`. There is no season picker
+  and no second season on screen: earlier seasons are training data the models
+  read, never something the user selects. Showing last year's number beside this
+  year's advice is exactly how you end up drafting for a season that already
+  happened. `/api/config` returns a single `season` (plus `started`).
+  What that means before kickoff, measured for 2026 in July:
+
+  | source | 2026 | so |
+  |---|---|---|
+  | `rosters` / `depth_charts` | 2,930 / 3,100 rows | draft, keepers, trades, dynasty, rookies **live** |
+  | `schedules` | 272 games, 67 with Vegas lines | game lines **live** |
+  | `weekly` / `injuries` / `snap_counts` | **0 rows** | lineup + props **dormant** |
+
+  Weekly stats only exist for seasons that have been PLAYED, so the two in-season
+  tabs are disabled with a plain explanation rather than failing on an empty
+  frame — and emphatically rather than serving last season's numbers under this
+  season's label. `ingest.season_not_started()` is the single predicate; the web
+  returns `{ok: false, not_started: true}` and the weekly CLIs exit with the same
+  sentence. The ingest CLI still pulls `FIRST_SEASON..current` — that's the
+  backend lake, and it's the one place `current` belongs.
 - `weekly` keeps skill positions **plus K** — `kdst.build_kicker` reads kickers
   out of it, so filtering them at ingest silently kills kicker projections.
   Team defense comes from `schedules`, not `weekly`.
