@@ -98,7 +98,12 @@ def _team_season(con) -> pd.DataFrame:
     return con.sql("""
         select player_id, season, team from (
             select gsis_id as player_id, season, team, count(*) c,
-                   row_number() over (partition by gsis_id, season order by count(*) desc) rn
+                   -- `team` breaks the tie: a player with equal week counts on two
+                   -- teams would otherwise get an arbitrary one, and DuckDB is
+                   -- multi-threaded, so "arbitrary" differs between runs. That
+                   -- flips team_changed/sos and makes the whole board irreproducible.
+                   row_number() over (partition by gsis_id, season
+                                      order by count(*) desc, team) rn
             from rosters where team is not null and gsis_id is not null
             group by gsis_id, season, team)
         where rn = 1
@@ -108,7 +113,9 @@ def _team_season(con) -> pd.DataFrame:
 def _team_coach(con) -> pd.DataFrame:
     """Head coach per team per season, derived from the schedule (for coach-change)."""
     return con.sql("""
-        select season, home_team as team, any_value(home_coach) as coach
+        -- min(), not any_value(): a mid-season coaching change gives a team two
+        -- coaches, and any_value() picks a different one run to run.
+        select season, home_team as team, min(home_coach) as coach
         from schedules where game_type = 'REG' group by season, home_team
     """).df()
 
@@ -724,7 +731,7 @@ def availability_context(target_season: int, con=None) -> pd.DataFrame:
     status = con.sql(
         "select player_id, status from ("
         "  select gsis_id as player_id, status, row_number() over ("
-        "    partition by gsis_id order by week desc) rn"
+        "    partition by gsis_id order by week desc, status) rn"
         "  from rosters where season = ? and gsis_id is not null) where rn = 1",
         params=[target_season],
     ).df()
@@ -816,7 +823,7 @@ def line_context(target_season: int, con=None) -> pd.DataFrame:
         return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
 
     names = con.sql(
-        "select distinct gsis_id, any_value(full_name) as nm from rosters "
+        "select distinct gsis_id, min(full_name) as nm from rosters "
         "where season = ? group by gsis_id", params=[target_season]).df()
     ol = ol.merge(names, on="gsis_id", how="left")
     return (ol.groupby("team", as_index=False)

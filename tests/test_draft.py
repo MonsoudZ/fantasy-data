@@ -244,3 +244,50 @@ def test_offensive_line_context_rides_only_on_backfields():
     assert pc.loc[pc["ol_out"] > 0, "position"].eq("RB").all() if "position" in pc else True
     flagged = pc[pc["ol_out"] > 0]
     assert not flagged.empty and flagged["ol_names"].notna().all()
+
+
+@requires_data_lake
+def test_draft_board_is_reproducible():
+    """Two identical calls must give identical numbers.
+
+    They didn't: `_team_season` picked a player's team with
+    `row_number() ... order by count(*) desc` and `_team_coach` used
+    `any_value()`. Ties there are resolved by whichever DuckDB thread finishes
+    first, so team_changed/coach_changed/sos flipped between runs and every
+    projection moved a point or two. Small on one player, but it re-ordered the
+    board -- and a season simulation built on it returned a different league
+    table every run, which is how this was found.
+    """
+    from ffdata.db import connect
+    from ffdata.draft import draft_board
+    from ffdata.scoring import STANDARD
+
+    league = {"teams": 12, "budget": 200, "roster_spots": 14,
+              "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
+    a = draft_board(2024, league, rules=STANDARD, con=connect())
+    b = draft_board(2024, league, rules=STANDARD, con=connect())
+    assert list(a["player"]) == list(b["player"]), "board ORDER must be stable"
+    pd.testing.assert_series_equal(a["proj"], b["proj"])
+    pd.testing.assert_series_equal(a["vor"], b["vor"])
+
+
+@requires_data_lake
+def test_team_and_coach_lookups_are_single_valued_and_stable():
+    """The two aggregations behind the reproducibility bug, checked directly."""
+    from ffdata.db import connect
+    from ffdata.draft import _team_coach, _team_season
+
+    con = connect()
+    ts, coach = _team_season(con), _team_coach(con)
+    assert not ts.duplicated(["player_id", "season"]).any()
+    assert not coach.duplicated(["season", "team"]).any()
+    # Compare CONTENT, not row order: DuckDB doesn't promise output order without
+    # an ORDER BY, and both frames are merged on keys downstream anyway. What must
+    # be stable is which team/coach each key maps to.
+    def canon(df, keys):
+        return df.sort_values(keys).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(canon(ts, ["player_id", "season"]),
+                                  canon(_team_season(con), ["player_id", "season"]))
+    pd.testing.assert_frame_equal(canon(coach, ["season", "team"]),
+                                  canon(_team_coach(con), ["season", "team"]))

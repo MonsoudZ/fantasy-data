@@ -174,7 +174,7 @@ def _load_snap_pct(con, seasons: list[int]) -> pd.DataFrame:
     where = f"and s.season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
     return con.sql(f"""
         with xwalk as (
-            select season, pfr_id, any_value(gsis_id) as gsis_id
+            select season, pfr_id, min(gsis_id) as gsis_id
             from rosters
             where pfr_id is not null and gsis_id is not null
             group by season, pfr_id
@@ -242,7 +242,7 @@ def _load_nextgen(con, seasons: list[int]) -> pd.DataFrame:
 def _load_pfr(con, seasons: list[int]) -> pd.DataFrame:
     """Per player-week PFR advanced metrics, keyed by gsis via the roster crosswalk."""
     where = f"and s.season in ({','.join(str(int(x)) for x in seasons)})" if seasons else ""
-    xwalk = "with xw as (select season, pfr_id, any_value(gsis_id) gsis_id from rosters " \
+    xwalk = "with xw as (select season, pfr_id, min(gsis_id) gsis_id from rosters " \
             "where pfr_id is not null and gsis_id is not null group by season, pfr_id)"
     pas = con.sql(f"""{xwalk}
         select x.gsis_id as player_id, s.season, s.week,
