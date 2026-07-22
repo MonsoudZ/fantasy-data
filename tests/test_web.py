@@ -365,3 +365,40 @@ def test_optimize_fills_defense_and_kicker_slots(monkeypatch):
     assert r["ok"]
     slots = {row["slot"]: row["name"] for row in r["lineup"]}
     assert slots["DEF"] == "BUF DST" and slots["K"] == "Justin Tucker"
+
+
+def test_markets_endpoint_pairs_each_stat_with_its_positions():
+    """Drives the props picker so a QB can't be offered `receptions`."""
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    d = TestClient(app).get("/api/markets").json()
+    assert d["ok"]
+    assert d["markets"]["passing_yards"] == ["QB"]
+    assert "QB" not in d["markets"]["receptions"]
+    assert set(d["markets"]["receiving_yards"]) == {"WR", "TE", "RB"}
+
+
+def test_names_endpoint_rejects_bad_scoring():
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    d = TestClient(app).post("/api/names", json={"scoring": "nonsense", "teams": 12}).json()
+    assert d["ok"] is False and "scoring" in d["error"]
+
+
+@requires_data_lake
+def test_names_endpoint_returns_the_whole_board_for_the_pickers():
+    """The pickers need EVERY draftable player, not the top-N the board shows --
+    otherwise a keeper or trade target outside the top 50 can't be selected."""
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    d = TestClient(app).post("/api/names", json={"season": 2024, "scoring": "ppr",
+                                                "teams": 12}).json()
+    assert d["ok"] is True, d.get("error")
+    assert d["count"] > 300
+    assert {"player", "position", "proj", "vor", "auction"} <= set(d["players"][0])
+    # Sorted by value, so a picker's first hits are the players you'd actually want.
+    vors = [p["vor"] for p in d["players"]]
+    assert vors == sorted(vors, reverse=True)

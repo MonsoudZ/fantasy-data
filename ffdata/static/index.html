@@ -71,6 +71,18 @@
   .chip b { color:var(--muted); font-weight:800; font-size:10px; }
   .chip .x { cursor:pointer; color:var(--muted); font-weight:800; }
   .search { position:relative; }
+  /* player picker: chips carry an inline cost box for keepers */
+  .pk .pk-in { width:100%; }
+  .pk-chips { min-height:22px; }
+  .pk-cost { width:52px; background:#0b1226; border:1px solid var(--line); border-radius:6px;
+    color:var(--text); font-size:11px; font-weight:700; padding:1px 4px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  .pr-n { width:72px; background:#0b1226; border:1px solid var(--line); border-radius:6px;
+    color:var(--text); font-size:12px; padding:3px 6px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  #pr-build select { background:#0b1226; border:1px solid var(--line); border-radius:6px;
+    color:var(--text); font-size:12px; padding:3px 6px; }
+  #pr-build .x { cursor:pointer; color:var(--muted); font-weight:800; }
   .results { position:absolute; z-index:30; left:0; right:0; top:44px; background:#0e1530; border:1px solid var(--line);
     border-radius:11px; overflow:hidden; box-shadow:var(--shadow); display:none; max-height:240px; overflow-y:auto; }
   .results.show { display:block; }
@@ -208,7 +220,7 @@
           <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
             <label style="margin-top:0">Waiver / free-agent finder</label>
             <div class="hint">Ranks available players by how much they'd add to your <b>starting</b> lineup this week — not raw projection. Uses your roster, scoring &amp; the superflex setting above.</div>
-            <textarea id="l-taken" placeholder="optional: players already rostered by others, one per line — excluded from suggestions" style="min-height:60px;margin-top:8px"></textarea>
+            <div id="l-taken" style="margin-top:8px"></div>
             <button class="go" id="l-fa-go" style="margin-top:8px">Find waiver upgrades</button>
           </div>
         </div>
@@ -261,8 +273,8 @@
               <button class="fchip" data-kt="compare">Compare</button>
             </div>
             <div id="kt-keepers">
-              <div class="hint">One per line: <b>player, cost</b> — cost is auction $ or a draft round. Surplus = value − cost.</div>
-              <textarea id="kt-keeper-lines" placeholder="Ja'Marr Chase, 42&#10;Bijan Robinson, 3" style="min-height:90px"></textarea>
+              <div class="hint">Search a player, then set what he costs you — auction $ or a draft round. Surplus = value − cost.</div>
+              <div id="kt-keeper-pick"></div>
               <div class="row" style="margin-top:8px;align-items:center">
                 <div class="seg" id="kt-costtype" style="flex:1"><button data-v="auction" class="on">Auction $</button><button data-v="round">Draft round</button></div>
                 <button class="draftbtn" id="kt-keeper-go">Evaluate</button>
@@ -271,15 +283,15 @@
             </div>
             <div id="kt-trade" style="display:none">
               <div class="row">
-                <div style="flex:1"><label>Side A gives</label><textarea id="kt-side-a" placeholder="one player per line" style="min-height:90px"></textarea></div>
-                <div style="flex:1"><label>Side B gives</label><textarea id="kt-side-b" placeholder="one player per line" style="min-height:90px"></textarea></div>
+                <div style="flex:1"><label>Side A gives</label><div id="kt-side-a"></div></div>
+                <div style="flex:1"><label>Side B gives</label><div id="kt-side-b"></div></div>
               </div>
               <button class="draftbtn" id="kt-trade-go" style="margin-top:8px">Evaluate trade</button>
               <div id="kt-trade-out" style="margin-top:12px"></div>
             </div>
             <div id="kt-compare" style="display:none">
-              <div class="hint">Up to 3 players, one per line — compared on projection, VOR, auction $, and rank.</div>
-              <textarea id="kt-compare-lines" placeholder="Ja'Marr Chase&#10;Bijan Robinson&#10;Josh Allen" style="min-height:70px"></textarea>
+              <div class="hint">Up to 3 players — compared on projection, VOR, auction $, and rank.</div>
+              <div id="kt-compare-pick"></div>
               <button class="draftbtn" id="kt-compare-go" style="margin-top:8px">Compare</button>
               <div id="kt-compare-out" style="margin-top:12px"></div>
             </div>
@@ -300,9 +312,10 @@
               <div style="flex:1"><label>Week</label><input type="number" id="pr-week" min="1" max="22" value="15" /></div>
               <div style="flex:1"><label>Season</label><input type="text" id="pr-season" class="season-fixed" value="—" readonly tabindex="-1" /></div>
             </div>
-            <label>Prop lines <button type="button" id="pr-sample" class="chip-btn">load sample</button></label>
-            <textarea id="pr-lines" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105&#10;Josh Allen,passing_yards,244.5,-110,-110"></textarea>
-            <div class="hint">Markets: passing_yards · passing_tds · receiving_yards · receptions · rushing_yards. You bring the odds.</div>
+            <label>Prop lines <button type="button" id="pr-sample" class="chip-btn">load sample</button><button type="button" id="pr-paste" class="chip-btn">paste CSV</button></label>
+            <div id="pr-build"></div>
+            <textarea id="pr-lines" style="display:none" placeholder="player,market,line,over_odds,under_odds&#10;Ja'Marr Chase,receiving_yards,89.5,-115,-105"></textarea>
+            <div class="hint">Search a player, pick his market, type the line and the two prices. You bring the odds.</div>
             <button class="go" id="pr-go">Find +EV edges</button>
           </div>
           <div class="card" id="pr-out"><div class="empty"><div class="big">📈</div>Paste prop lines and find your edges.<div class="hint" style="margin-top:8px">First run trains per-stat models (~2 min).</div></div></div>
@@ -436,6 +449,96 @@ $("#opp-search").oninput=()=>pickerSearch($("#opp-search"), null, "opp-res");
 renderRoster();
 document.addEventListener("click",e=>{ if(!e.target.closest(".search")) document.querySelectorAll(".results").forEach(r=>r.classList.remove("show")); });
 
+/* ---- reusable player picker --------------------------------------------
+   Every place that used to ask you to TYPE a name now searches the list we
+   already have. A typo can no longer silently drop a player from a keeper set,
+   a trade, or a waiver exclusion -- you either pick a real player or you don't.
+   `source` returns [{name, position, team, num}] so one renderer serves both
+   the weekly projection board and the season-long draft board. */
+const PK = {};
+function picker(id, opts){
+  const host = $("#"+id); if(!host) return null;
+  const P = { id, items: [], opts, host };
+  PK[id] = P;
+  host.classList.add("pk");
+  host.innerHTML =
+    `<div class="search"><input type="text" class="pk-in" placeholder="${opts.placeholder||"🔍 search players…"}" autocomplete="off"><div class="results" id="${id}-res"></div></div>`
+    + `<div class="chips pk-chips" id="${id}-chips"></div>`;
+  host.querySelector(".pk-in").oninput = () => pkSearch(id);
+  P.names = () => P.items.map(i => i.name);
+  // Keepers need a cost per player; everything else is just a name.
+  P.pairs = () => P.items.map(i => [i.name, Number(i.cost) || 0]);
+  P.set = list => { P.items = list.slice(0, opts.max || 99); pkRender(id); };
+  P.clear = () => P.set([]);
+  pkRender(id);
+  return P;
+}
+function pkRender(id){
+  const P = PK[id], box = $("#"+id+"-chips");
+  const full = P.opts.max && P.items.length >= P.opts.max;
+  P.host.querySelector(".pk-in").style.display = full ? "none" : "";
+  box.innerHTML = P.items.length ? P.items.map((it, i) => `<span class="chip">
+      <span class="pos ${it.position}">${it.position}</span>${it.name}
+      ${P.opts.cost ? `<input class="pk-cost" type="number" data-i="${i}" value="${it.cost}" title="${P.opts.costLabel||"cost"}">` : ""}
+      <span class="x" data-i="${i}">✕</span></span>`).join("")
+    : `<span class="hint">${P.opts.empty || "Nothing added yet."}</span>`;
+  box.querySelectorAll(".x").forEach(x => x.onclick = () => {
+    P.items.splice(+x.dataset.i, 1); pkRender(id); });
+  box.querySelectorAll(".pk-cost").forEach(c => c.oninput = () => {
+    P.items[+c.dataset.i].cost = c.value; });
+}
+async function pkSearch(id){
+  const P = PK[id], inp = P.host.querySelector(".pk-in"), box = $("#"+id+"-res");
+  const q = inp.value.trim();
+  if(!q){ box.classList.remove("show"); return; }
+  box.innerHTML = `<div class="pr"><span></span><span class="nm">Loading…</span><span></span><span></span></div>`;
+  box.classList.add("show");
+  let list = [];
+  try{ list = await P.opts.source(); }
+  catch(e){ box.innerHTML = `<div class="pr"><span></span><span class="nm">Couldn't load players</span><span></span><span></span></div>`; return; }
+  const have = new Set(P.items.map(i => norm(i.name)));
+  const hits = list.filter(p => (!P.opts.pos || P.opts.pos.includes(p.position))
+      && norm(p.name).includes(norm(q)) && !have.has(norm(p.name))).slice(0, 8);
+  box.innerHTML = hits.length ? hits.map(p => `<div class="pr" data-n="${p.name.replace(/"/g,'&quot;')}" data-p="${p.position}">
+      <span class="pos ${p.position}">${p.position}</span><span class="nm">${p.name}</span>
+      <span class="tm">${p.team||""}</span><span class="pd">${p.num==null?"":p.num}</span></div>`).join("")
+    : `<div class="pr"><span></span><span class="nm">No match</span><span></span><span></span></div>`;
+  box.querySelectorAll(".pr[data-n]").forEach(el => el.onclick = () => {
+    P.items.push({name: el.dataset.n, position: el.dataset.p, cost: P.opts.costDefault ?? 1});
+    if(P.opts.max) P.items = P.items.slice(0, P.opts.max);
+    inp.value = ""; box.classList.remove("show"); pkRender(id);
+    if(P.opts.onAdd) P.opts.onAdd(P);
+  });
+}
+/* Sources: the weekly projection board, and the season-long draft board. */
+const weekSource = async () => (await players()).map(p =>
+  ({name:p.name, position:p.position, team:p.team, num:p.pred.toFixed(1)}));
+// The props tab has its OWN week/season inputs -- searching against the lineup
+// tab's board would price a player off a week the user never asked about.
+let PNAMES = null, pnKey = null;
+async function propSource(){
+  const key = $("#pr-season").value+"|"+$("#pr-week").value;
+  if(PNAMES && pnKey === key) return PNAMES;
+  const r = await fetch("/api/players", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({season:+$("#pr-season").value, week:+$("#pr-week").value,
+                          scoring:"ppr", projector:"gbm"})});
+  const d = await r.json();
+  PNAMES = d.ok ? d.players.map(p=>({name:p.name, position:p.position, team:p.team,
+                                     num:p.pred.toFixed(1)})) : [];
+  pnKey = key; return PNAMES;
+}
+let DNAMES = null, dnKey = null;
+async function draftSource(){
+  const key = D.scoring+"|"+$("#d-teams").value+"|"+$("#d-season").value+"|"+(D.rules?JSON.stringify(D.rules):"");
+  if(DNAMES && dnKey === key) return DNAMES;
+  const r = await fetch("/api/names", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({season:+$("#d-season").value, teams:+$("#d-teams").value,
+                          scoring:D.scoring, rules:D.rules, lineup:D.lineup||null})});
+  const d = await r.json();
+  DNAMES = d.ok ? d.players.map(p => ({name:p.player, position:p.position, team:"", num:"$"+p.auction})) : [];
+  dnKey = key; return DNAMES;
+}
+
 /* ---- saved teams (lineup) ---- */
 let TEAMS=[];
 async function refreshTeams(select){
@@ -486,7 +589,7 @@ $("#l-fa-go").onclick=async()=>{
   const btn=$("#l-fa-go"); btn.disabled=true; btn.textContent="Finding…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting the slate & ranking free agents…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
   const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules,
-    projector:$("#l-proj").value, roster, exclude:$("#l-taken").value, lineup:lineupCfg(), n:15 };
+    projector:$("#l-proj").value, roster, exclude:PK["l-taken"].names().join("\n"), lineup:lineupCfg(), n:15 };
   try{ const d=await (await fetch("/api/freeagents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderFreeAgents(d); }
   catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
   btn.disabled=false; btn.textContent="Find waiver upgrades";
@@ -707,10 +810,24 @@ document.querySelectorAll("#kt .fchip[data-kt]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#kt .fchip[data-kt]").forEach(x=>x.classList.remove("on")); b.classList.add("on");
   ["keepers","trade","compare"].forEach(k=>{ const el=$("#kt-"+k); if(el) el.style.display = b.dataset.kt===k?"block":"none"; });
 });
-seg("kt-costtype", v=>{ KT.costType=v; });
+seg("kt-costtype", v=>{ KT.costType=v;
+  // Relabel the per-chip cost box so "3" reads as a round, not three dollars.
+  document.querySelectorAll("#kt-keeper-pick .pk-cost").forEach(c=>c.title = v==="round"?"draft round":"auction $");
+});
+
+/* Mount every picker. Draft-side ones search the season-long board; the waiver
+   exclusion searches the weekly board it will actually be filtered against. */
+picker("l-taken", {source: weekSource, placeholder:"🔍 players already rostered by others…",
+                   empty:"Nobody excluded — suggestions consider every free agent."});
+picker("kt-keeper-pick", {source: draftSource, placeholder:"🔍 search a player to keep…",
+                          cost:true, costDefault:1, empty:"No keepers yet."});
+picker("kt-side-a", {source: draftSource, placeholder:"🔍 add to side A…", empty:"Nobody yet."});
+picker("kt-side-b", {source: draftSource, placeholder:"🔍 add to side B…", empty:"Nobody yet."});
+picker("kt-compare-pick", {source: draftSource, max:3, placeholder:"🔍 add a player to compare…",
+                           empty:"Add 2-3 players."});
 $("#kt-compare-go").onclick=async()=>{
-  const players=$("#kt-compare-lines").value.trim().split("\n").map(s=>s.trim()).filter(Boolean).slice(0,3);
-  if(players.length<2){ $("#kt-compare-out").innerHTML=`<div class="warn">Enter at least 2 players.</div>`; return; }
+  const players=PK["kt-compare-pick"].names();
+  if(players.length<2){ $("#kt-compare-out").innerHTML=`<div class="warn">Search and add at least 2 players.</div>`; return; }
   $("#kt-compare-out").innerHTML=`<div class="spinner"><div class="ring"></div>Comparing…</div>`;
   try{
     const d=await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...dcfg(), players})})).json();
@@ -724,10 +841,8 @@ $("#kt-compare-go").onclick=async()=>{
   }catch(e){ $("#kt-compare-out").innerHTML=`<div class="err">Request failed.</div>`; }
 };
 $("#kt-keeper-go").onclick=async()=>{
-  const keepers=$("#kt-keeper-lines").value.trim().split("\n")
-    .map(l=>{ const p=l.split(","); return p.length>=2?[p[0].trim(), parseFloat(p[1])]:null; })
-    .filter(k=>k&&k[0]&&!isNaN(k[1]));
-  if(!keepers.length){ $("#kt-keeper-out").innerHTML=`<div class="warn">Enter keepers as “player, cost”.</div>`; return; }
+  const keepers=PK["kt-keeper-pick"].pairs().filter(k=>k[0]&&!isNaN(k[1]));
+  if(!keepers.length){ $("#kt-keeper-out").innerHTML=`<div class="warn">Search a player to add him as a keeper.</div>`; return; }
   $("#kt-keeper-out").innerHTML=`<div class="spinner"><div class="ring"></div>Evaluating…</div>`;
   try{
     const d=await (await fetch("/api/keepers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...dcfg(), keepers, cost_type:KT.costType})})).json();
@@ -739,8 +854,7 @@ $("#kt-keeper-go").onclick=async()=>{
   }catch(e){ $("#kt-keeper-out").innerHTML=`<div class="err">Request failed.</div>`; }
 };
 $("#kt-trade-go").onclick=async()=>{
-  const lines=id=>$(id).value.trim().split("\n").map(s=>s.trim()).filter(Boolean);
-  const side_a=lines("#kt-side-a"), side_b=lines("#kt-side-b");
+  const side_a=PK["kt-side-a"].names(), side_b=PK["kt-side-b"].names();
   if(!side_a.length && !side_b.length){ $("#kt-trade-out").innerHTML=`<div class="warn">Add players to at least one side.</div>`; return; }
   $("#kt-trade-out").innerHTML=`<div class="spinner"><div class="ring"></div>Evaluating…</div>`;
   try{
@@ -753,13 +867,66 @@ $("#kt-trade-go").onclick=async()=>{
 };
 
 /* ============ PROPS ============ */
-$("#pr-sample").onclick=()=>{ $("#pr-lines").value=`player,market,line,over_odds,under_odds
+/* ---- props builder ------------------------------------------------------
+   Prop lines used to be a hand-typed CSV, where a misspelt name just silently
+   didn't price. Now you search the same weekly board the model projects, and
+   the market list narrows to the stats that player's position actually accrues
+   (no QB receptions). The CSV textarea still exists behind "paste CSV" for
+   bulk entry, and remains the single format sent to the server. */
+let MARKETS_MAP=null, PROPS=[];
+async function marketsMap(){
+  if(MARKETS_MAP) return MARKETS_MAP;
+  try{ const d=await (await fetch("/api/markets")).json(); MARKETS_MAP=d.ok?d.markets:{}; }
+  catch(e){ MARKETS_MAP={}; }
+  return MARKETS_MAP;
+}
+function propsToCsv(){
+  return "player,market,line,over_odds,under_odds\n" + PROPS.filter(r=>r.player&&r.market&&r.line!=="")
+    .map(r=>`${r.player},${r.market},${r.line},${r.over||-110},${r.under||-110}`).join("\n");
+}
+async function renderProps_(){
+  const mm = await marketsMap();
+  const host=$("#pr-build"); if(!host) return;
+  host.innerHTML = `<div id="pr-add"></div>` + (PROPS.length ? `<table style="margin-top:10px"><thead><tr>
+      <th>Player</th><th>Market</th><th class="num">Line</th><th class="num">Over</th><th class="num">Under</th><th></th></tr></thead><tbody>${
+    PROPS.map((r,i)=>{
+      const ok=Object.keys(mm).filter(m=>(mm[m]||[]).includes(r.position));
+      return `<tr class="pos-row"><td class="pname"><span class="pos ${r.position}">${r.position}</span> ${r.player}</td>
+        <td><select class="pr-f" data-i="${i}" data-k="market">${ok.map(m=>`<option value="${m}"${m===r.market?" selected":""}>${m.replace(/_/g," ")}</option>`).join("")}</select></td>
+        <td class="num"><input class="pr-f pr-n" data-i="${i}" data-k="line" type="number" step="0.5" value="${r.line}"></td>
+        <td class="num"><input class="pr-f pr-n" data-i="${i}" data-k="over" type="number" value="${r.over}"></td>
+        <td class="num"><input class="pr-f pr-n" data-i="${i}" data-k="under" type="number" value="${r.under}"></td>
+        <td><span class="x" data-del="${i}">✕</span></td></tr>`;}).join("")}</tbody></table>`
+    : `<div class="hint" style="margin-top:8px">No props yet — search a player above.</div>`);
+  host.querySelectorAll(".pr-f").forEach(el=>el.oninput=()=>{ PROPS[+el.dataset.i][el.dataset.k]=el.value; });
+  host.querySelectorAll("[data-del]").forEach(el=>el.onclick=()=>{ PROPS.splice(+el.dataset.del,1); renderProps_(); });
+  picker("pr-add", {source: propSource, placeholder:"🔍 search a player to add a prop…",
+    empty:"", onAdd: async P=>{
+      const m=await marketsMap(), it=P.items[P.items.length-1];
+      const ok=Object.keys(m).filter(k=>(m[k]||[]).includes(it.position));
+      PROPS.push({player:it.name, position:it.position, market:ok[0]||"receiving_yards",
+                  line:"", over:-110, under:-110});
+      P.items=[];            // the chip's job is done; the row below IS the record
+      renderProps_();
+    }});
+}
+$("#pr-paste").onclick=()=>{ const t=$("#pr-lines");
+  const showing = t.style.display!=="none";
+  t.style.display = showing?"none":"block"; $("#pr-build").style.display = showing?"":"none";
+  if(!showing && PROPS.length) t.value = propsToCsv();     // carry rows into the CSV
+};
+renderProps_();
+$("#pr-sample").onclick=()=>{ $("#pr-lines").style.display="block"; $("#pr-build").style.display="none";
+  $("#pr-lines").value=`player,market,line,over_odds,under_odds
 Ja'Marr Chase,receiving_yards,89.5,-115,-105
 Amon-Ra St. Brown,receptions,6.5,-130,110
 Saquon Barkley,rushing_yards,99.5,-110,-110
 Josh Allen,passing_yards,244.5,-112,-108`; };
 $("#pr-go").onclick=async()=>{
-  const lines=$("#pr-lines").value.trim(); if(!lines){ $("#pr-lines").focus(); return; }
+  const usingCsv = $("#pr-lines").style.display !== "none";
+  const lines = usingCsv ? $("#pr-lines").value.trim() : propsToCsv();
+  if(!lines || lines.split("\n").length<2){
+    $("#pr-out").innerHTML=`<div class="warn">Add at least one prop — search a player, then set his line and prices.</div>`; return; }
   const btn=$("#pr-go"); btn.disabled=true; btn.textContent="Pricing…";
   $("#pr-out").innerHTML=`<div class="spinner"><div class="ring"></div>Pricing props…<br><span class="hint">First run trains per-stat models (~2 min).</span></div>`;
   try{ const d=await (await fetch("/api/props",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#pr-season").value,week:+$("#pr-week").value,lines})})).json(); renderProps(d); }

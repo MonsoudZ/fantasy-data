@@ -75,6 +75,25 @@ class ResidualSampler:
         return pred + self.rng.choice(pool, size=n, replace=True)
 
 
+def fit_seasons(train_from: int = 2019, resid_seasons: list[int] | None = None,
+                through: int | None = None) -> tuple[list[int], list[int]]:
+    """(feature seasons, residual seasons) for MatchupSimulator.fit.
+
+    The feature frame MUST reach the most recent played season, or that season
+    can't be projected at all: project() gets an empty test set and LightGBM
+    raises "Input data must be 2 dimensional and non empty", which takes the
+    lineup optimizer and the props tab down with it.
+
+    This was a hardcoded [2023, 2024], so the whole weekly side silently died
+    the moment 2024 ended. Derive it from the calendar instead, the same way
+    gamelines.py derives its residual seasons from the data.
+    """
+    from .ingest import current_nfl_season
+    through = through or current_nfl_season()
+    resid = resid_seasons or [through - 1, through]
+    return list(range(train_from, max(max(resid), through) + 1)), resid
+
+
 class MatchupSimulator:
     """Projections + a residual sampler = simulated lineup totals and win odds."""
 
@@ -105,8 +124,7 @@ class MatchupSimulator:
         is requested but torch isn't installed, we warn and fall back to "gbm"
         rather than crash, so the default works on a core-only install."""
         from .scoring import PPR
-        resid_seasons = resid_seasons or [2023, 2024]
-        seasons = list(range(train_from, max(resid_seasons) + 1))
+        seasons, resid_seasons = fit_seasons(train_from, resid_seasons)
         feats = build_features(seasons=seasons, positions=positions, rules=rules or PPR)
 
         # find_spec locates torch WITHOUT importing it, preserving the lazy-import

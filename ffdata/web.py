@@ -33,7 +33,7 @@ from .matchup import MatchupSimulator
 from .optimize import (
     LineupOptimizer, _assemble, _match, _norm, free_agent_advice, slots_from_lineup,
 )
-from .props import price_props
+from .props import MARKETS, price_props
 from .scoring import PPR, HALF_PPR, STANDARD, preset_name, rules_from, rules_to_dict
 from .sleeper import LIVE_SEVERE, LIVE_STATUS, import_league, list_user_leagues
 from .store import (
@@ -314,6 +314,31 @@ def _board_or_error(req: BoardRequest):
     if board.empty:
         return None, {"ok": False, "error": f"No draftable data for {req.season}. Ingest it first."}
     return board, None
+
+
+@app.post("/api/names")
+def api_names(req: BoardRequest):
+    """Every draftable player, for the UI's pickers.
+
+    Anywhere the UI used to ask you to TYPE a name it now searches this instead,
+    so a typo can't silently drop a player from a keeper set or a trade. Reuses
+    the same cached board the draft tab builds, so it's only slow once.
+    """
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    rows = [{"player": r["player"], "position": r["position"],
+             "proj": round(float(r["proj"]), 1), "vor": round(float(r["vor"]), 1),
+             "auction": int(r["auction"])}
+            for _, r in board.iterrows()]
+    return {"ok": True, "count": len(rows), "players": rows}
+
+
+@app.get("/api/markets")
+def api_markets():
+    """Prop markets and the positions that accrue them -- drives the props picker
+    so you can't pair a QB with receptions."""
+    return {"ok": True, "markets": {m: list(pos) for m, pos in MARKETS.items()}}
 
 
 @app.post("/api/draft")

@@ -39,7 +39,7 @@ Network access required (nflverse pulls over HTTP).
 | `store.py` | JSON persistence for saved leagues + lineup teams (incl. custom scoring) |
 | `sleeper.py` | import a league from Sleeper's public API; **live availability feed** (today's IR/PUP/suspensions) |
 | `advice.py` | grounded Claude explanations of compare/keeper/trade decisions (opt-in) |
-| `web.py` `static/index.html` | FastAPI + tabbed UI |
+| `web.py` `static/index.html` | FastAPI + tabbed UI; every player entry is a search picker, never typed |
 
 ## Common commands
 
@@ -61,6 +61,14 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   features use only prior-season data + preseason-known context (schedule, age).
 - **Two projection regimes:** weekly (in-season, trailing features) and season
   (preseason, prior-year features). They are *different models* — don't conflate.
+- **Never hardcode a season.** `MatchupSimulator.fit` defaulted `resid_seasons`
+  to a literal `[2023, 2024]` and derived the feature range from it, so the frame
+  froze at 2024 and *every* later season became unprojectable — `project()` got
+  an empty test set and LightGBM raised "Input data must be 2 dimensional and non
+  empty", which killed the **whole lineup optimizer and props tab** the moment
+  2024 ended. Now `matchup.fit_seasons()` derives it from `current_nfl_season()`
+  (pinned by a test). `gamelines.py` had the right pattern all along: take the
+  seasons from the data (`sorted(train["season"].unique())[-2:]`).
 
 ## Findings already established (don't re-litigate)
 
@@ -216,6 +224,16 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   Depth charts changed format mid-stream: 2019–24 are weekly rows on
   `depth_position`/`depth_team`/`club_code`, 2025+ are dated snapshots on
   `pos_abb`/`pos_rank`/`team`. Any multi-season depth query must read both.
+- **No player is ever typed.** Every spot that used to take a name — keepers,
+  both trade sides, compare, waiver exclusions, prop lines — is a search picker
+  over the list we already have (`picker()` in `index.html`, one component, two
+  sources: `/api/players` for weekly and `/api/names` for the season-long board).
+  A misspelt name used to silently vanish from a keeper set or never price a prop.
+  `/api/names` returns the **whole** board, not the top-N the UI displays, or a
+  keeper outside the top 50 couldn't be selected; it reuses the cached board so
+  it's only slow once. The props builder narrows each player's market list via
+  `/api/markets` (no QB receptions) and still serialises to the same CSV the
+  server parses — "paste CSV" toggles the raw box for bulk entry.
 - `draft_picks` uses **PFR team codes** (GNB/KAN/LVR/NWE/NOR/SFO/TAM/LAR); the
   rest of the lake uses nflverse codes. `_PFR_TEAM` maps them — without it, eight
   teams silently lose all team context.
