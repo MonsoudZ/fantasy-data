@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .draft import DEFAULT_LEAGUE, best_available, draft_board
+from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, trade_value
 from .features import build_features
 from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
@@ -189,15 +189,29 @@ def optimize(req: OptRequest):
             "missing": missing, "pool_size": len(pool)}
 
 
-class DraftRequest(BaseModel):
+class BoardRequest(BaseModel):
+    """Shared draft-board config (draft board, keepers, and trades all use it)."""
     season: int = Field(default_factory=current_nfl_season, ge=1999, le=2100)
     teams: int = Field(12, ge=2, le=32)
     scoring: str = "ppr"
+    rules: dict | None = None    # full custom scoring (from an imported league)
+    lineup: dict | None = None   # {starters, flex, superflex} for VOR (imported)
+
+
+class DraftRequest(BoardRequest):
     drafted: list[str] = []
     position: str | None = None
     n: int = Field(50, ge=1, le=500)
-    rules: dict | None = None    # full custom scoring (from an imported league)
-    lineup: dict | None = None   # {starters, flex, superflex} for VOR (imported)
+
+
+class KeeperRequest(BoardRequest):
+    keepers: list = []           # [[player, cost], ...]
+    cost_type: str = "auction"   # "auction" ($) or "round" (draft round)
+
+
+class TradeRequest(BoardRequest):
+    side_a: list[str] = []
+    side_b: list[str] = []
 
 
 def _league_cfg(teams: int, lineup: dict | None) -> dict:
@@ -217,27 +231,75 @@ def _lineup_key(lineup: dict | None):
             lineup.get("flex"), lineup.get("superflex"))
 
 
+def _get_board(req: BoardRequest):
+    """Build (or reuse the cached) draft board for a BoardRequest's config.
+
+    Raises ValueError('bad scoring') on invalid scoring; other failures (e.g. no
+    data lake) propagate for the caller to log and surface generically.
+    """
+    if req.scoring not in _RULES and not req.rules:
+        raise ValueError("bad scoring")
+    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules), _lineup_key(req.lineup))
+    if key not in _DRAFT:
+        _cache_put(_DRAFT, key, draft_board(
+            req.season, _league_cfg(req.teams, req.lineup),
+            rules=rules_from(req.scoring, req.rules)))
+    return _DRAFT[key]
+
+
+def _board_or_error(req: BoardRequest):
+    """(board, None) on success, or (None, error_response) to return to the UI."""
+    try:
+        board = _get_board(req)
+    except ValueError as exc:
+        return None, {"ok": False, "error": str(exc)}
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("draft_board failed (season=%s teams=%s)", req.season, req.teams)
+        return None, {"ok": False, "error": "could not build the draft board (see server logs)"}
+    if board.empty:
+        return None, {"ok": False, "error": f"No draftable data for {req.season}. Ingest it first."}
+    return board, None
+
+
 @app.post("/api/draft")
 def api_draft(req: DraftRequest):
-    if req.scoring not in _RULES and not req.rules:
-        return {"ok": False, "error": "bad scoring"}
-    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules), _lineup_key(req.lineup))
-    try:
-        if key not in _DRAFT:
-            _cache_put(_DRAFT, key, draft_board(
-                req.season, _league_cfg(req.teams, req.lineup),
-                rules=rules_from(req.scoring, req.rules)))
-    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
-        _log.exception("draft_board failed (%s)", key)
-        return {"ok": False, "error": "could not build the draft board (see server logs)"}
-    board = _DRAFT[key]
-    if board.empty:
-        return {"ok": False, "error": f"No draftable data for {req.season}. Ingest it first."}
+    board, err = _board_or_error(req)
+    if err:
+        return err
     avail = best_available(board, req.drafted, req.position or None, req.n)
     players = [{"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
                 "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
                for _, r in avail.iterrows()]
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
+
+
+@app.post("/api/keepers")
+def api_keepers(req: KeeperRequest):
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    pairs = []
+    for k in req.keepers:
+        if isinstance(k, (list, tuple)) and len(k) >= 2:
+            try:
+                pairs.append((str(k[0]), float(k[1])))
+            except (ValueError, TypeError):
+                pass
+    if not pairs:
+        return {"ok": False, "error": "No valid keepers. Format: player, cost"}
+    cost_type = req.cost_type if req.cost_type in ("auction", "round") else "auction"
+    df = keeper_value(board, pairs, teams=req.teams, cost_type=cost_type)
+    return {"ok": True, "cost_type": cost_type, "keepers": df.to_dict("records")}
+
+
+@app.post("/api/trade")
+def api_trade(req: TradeRequest):
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    if not req.side_a and not req.side_b:
+        return {"ok": False, "error": "Add players to at least one side."}
+    return {"ok": True, **trade_value(board, req.side_a, req.side_b)}
 
 
 class PropsRequest(BaseModel):

@@ -141,6 +141,48 @@ def test_league_cfg_applies_imported_lineup():
     assert _league_cfg(12, None)["superflex"] == 0   # default has no superflex
 
 
+def test_keepers_and_trades_endpoints(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    board = pd.DataFrame({
+        "player": ["Ja'Marr Chase", "Bijan Robinson", "Josh Allen", "CeeDee Lamb"],
+        "position": ["WR", "RB", "QB", "WR"],
+        "proj": [280.0, 270.0, 360.0, 260.0],
+        "vor": [80.0, 70.0, 60.0, 55.0],
+        "auction": [55, 50, 20, 45],
+    })
+    monkeypatch.setattr(web, "draft_board", lambda *a, **k: board)
+    web._DRAFT.clear()
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+
+    # Keepers: surplus = auction value - cost.
+    r = c.post("/api/keepers", json={"season": 2099, "teams": 12,
+                                     "keepers": [["Ja'Marr Chase", 40], ["Josh Allen", 5]]}).json()
+    assert r["ok"]
+    ks = {k["player"]: k for k in r["keepers"]}
+    assert ks["Ja'Marr Chase"]["surplus"] == 15      # 55 - 40
+    assert ks["Josh Allen"]["surplus"] == 15         # 20 - 5
+
+    assert c.post("/api/keepers", json={"season": 2099, "keepers": []}).json()["error"].startswith("No valid")
+    assert c.post("/api/keepers", json={"season": 2099, "scoring": "nope",
+                                        "keepers": [["x", 1]]}).json()["error"] == "bad scoring"
+
+    # Trade: totals per side + a verdict (diff beyond the "roughly even" band).
+    t = c.post("/api/trade", json={"season": 2099, "teams": 12,
+                                   "side_a": ["Ja'Marr Chase"], "side_b": ["Josh Allen"]}).json()
+    assert t["ok"]
+    assert t["side_a"]["auction"] == 55 and t["side_b"]["auction"] == 20
+    assert t["diff"] == 35 and "Side A" in t["verdict"]
+    # Close values fall in the even band.
+    even = c.post("/api/trade", json={"season": 2099, "side_a": ["Ja'Marr Chase"],
+                                      "side_b": ["Bijan Robinson"]}).json()
+    assert even["verdict"] == "roughly even"      # 55 vs 50, within $5
+    assert c.post("/api/trade", json={"season": 2099}).json()["error"].startswith("Add players")
+
+
 def test_sleeper_import_endpoints(tmp_path, monkeypatch):
     monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
     import ffdata.web as web
