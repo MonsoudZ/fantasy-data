@@ -34,6 +34,7 @@ import lightgbm as lgb
 from .db import connect
 from .gbm import gbm_params
 from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
+from .sleeper import LIVE_SEVERE, norm_name
 
 POSITIONS = ("QB", "RB", "WR", "TE")
 # draft_picks ships PFR team codes; everything else in the lake uses nflverse's.
@@ -610,6 +611,48 @@ _MISSED = ("Out", "Doubtful")
 _TRANSIENT = ("Illness",)
 
 
+def _live_status(con, season: int) -> pd.DataFrame:
+    """Sleeper's live feed joined to our player ids.
+
+    This is the only source we have that knows about a player TODAY -- nflverse's
+    injury report ends with last season, and its roster `status` is a coarse
+    snapshot. Sleeper carries the current designation plus body part and notes
+    ("Surgery"), and it is where suspensions actually live: `injury_status = Sus`.
+
+    Read from the cached `sleeper_status` view, never fetched here -- see
+    `sleeper.refresh_live_status`. Absent view (nobody ran the refresh, or no
+    network) simply means no live column.
+
+    Joined on name+position, not id: Sleeper populates `gsis_id` for only ~16% of
+    rostered players. Both sides go through the SAME `norm_name`, so the keys
+    can't drift apart.
+    """
+    cols = ["player_id", "live_code", "live_body", "live_note", "news_date"]
+    try:
+        live = con.sql("select * from sleeper_status where live_code is not null").df()
+    except duckdb.CatalogException:
+        return pd.DataFrame(columns=cols)
+    if live.empty:
+        return pd.DataFrame(columns=cols)
+
+    ros = con.sql(
+        "select distinct gsis_id as player_id, full_name, position from rosters "
+        "where season = ? and gsis_id is not null", params=[season]).df()
+    ros["name_key"] = ros["full_name"].map(norm_name)
+    # A name+position key shared by two players can't be resolved, so it is
+    # dropped rather than fanned out onto both of them.
+    dupe = ros.duplicated(["name_key", "position"], keep=False)
+    ros = ros[~dupe]
+
+    live["gsis_id"] = live["gsis_id"].astype("string").str.strip()
+    by_id = live[live["gsis_id"].notna()].merge(
+        ros[["player_id"]], left_on="gsis_id", right_on="player_id", how="inner")
+    by_name = live.merge(ros[["player_id", "name_key", "position"]],
+                         on=["name_key", "position"], how="inner")
+    both = pd.concat([by_id, by_name], ignore_index=True)
+    return both.drop_duplicates("player_id", keep="first")[cols]
+
+
 def availability_context(target_season: int, con=None) -> pd.DataFrame:
     """How last season ENDED for each player, plus how he sits right now.
 
@@ -643,8 +686,9 @@ def availability_context(target_season: int, con=None) -> pd.DataFrame:
         # The dataset simply isn't in the lake: degrade to no notes. Narrower than
         # `except Exception` on purpose -- a renamed upstream column should raise
         # here rather than silently blanking every player's health.
-        return pd.DataFrame(columns=["player_id", "weeks_out", "last_injury",
-                                     "last_week", "last_round", "ended_hurt", "status"])
+        return pd.DataFrame(columns=["player_id", "weeks_out", "last_injury", "last_week",
+                                     "last_round", "ended_hurt", "status",
+                                     "live_code", "live_body", "live_note", "news_date"])
 
     out = pd.DataFrame(columns=["player_id"])
     if not inj.empty:
@@ -689,8 +733,10 @@ def availability_context(target_season: int, con=None) -> pd.DataFrame:
     out["status"] = out["status"].map(_INACTIVE_STATUS)
     # A player can be known only from the roster (on IR, no report rows), so the
     # injury columns may never have been created -- pin the schema either way.
+    out = out.merge(_live_status(con, target_season), on="player_id", how="outer")
     out = out.reindex(columns=["player_id", "weeks_out", "last_injury", "last_week",
-                               "last_round", "ended_hurt", "status"])
+                               "last_round", "ended_hurt", "status",
+                               "live_code", "live_body", "live_note", "news_date"])
     for c in ("weeks_out", "last_week"):
         out[c] = out[c].astype("Float64")
     out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
@@ -761,7 +807,11 @@ def line_context(target_season: int, con=None) -> pd.DataFrame:
     avail = availability_context(target_season, con).set_index("player_id")
     hurt = ol["gsis_id"].map(avail["ended_hurt"]).fillna(False)
     gone = ol["gsis_id"].map(avail["status"]).notna()
-    ol = ol[hurt.values | gone.values]
+    # A lineman on IR/PUP/suspended TODAY counts; merely Questionable does not
+    # (most Questionable players start, and one man down measured as no effect
+    # anyway -- a soft designation must not push a team over the threshold).
+    now = ol["gsis_id"].map(avail["live_code"]).isin(LIVE_SEVERE)
+    ol = ol[hurt.values | gone.values | now.values]
     if ol.empty:
         return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
 
@@ -858,5 +908,5 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     cols = ["player_id", "team", "prior_team", "moved", "blocked_by", "blocked_by_fp",
             "vacated_fp", "depth_rank", "pass_rate", "new_coach",
             "weeks_out", "last_injury", "last_week", "last_round", "ended_hurt", "status",
-            "ol_out", "ol_names"]
+            "live_code", "live_body", "live_note", "news_date", "ol_out", "ol_names"]
     return out[cols].drop_duplicates("player_id").reset_index(drop=True)

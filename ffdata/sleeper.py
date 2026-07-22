@@ -203,3 +203,106 @@ def import_league(league_id: str, username: str, season: int,
     team = Team(name=name, season=season, scoring=label, rules=rules_dict,
                 roster=map_roster(rosters, uid, players))
     return league, team
+
+
+# --------------------------------------------------------------------------- #
+# Live availability feed -> the lake
+# --------------------------------------------------------------------------- #
+
+# Sleeper's `injury_status` codes. This is where suspensions actually live --
+# NOT in the top-level `status` field, which only ever reads Active/Inactive.
+LIVE_STATUS = {
+    "Sus": "suspended",
+    "DNR": "not reporting",
+    "IR": "on injured reserve",
+    "PUP": "on PUP",
+    "NA": "on non-football injury",
+    "COV": "on the COVID list",
+    "Out": "out",
+    "Doubtful": "doubtful",
+    "Questionable": "questionable",
+}
+# Nothing above this is a hard absence; Questionable/Doubtful are soft.
+LIVE_SEVERE = ("Sus", "DNR", "IR", "PUP", "NA", "Out")
+# Sleeper asks callers to hit /players/nfl at most once a day. Well inside that.
+LIVE_TTL_HOURS = 12
+_LIVE_DATASET = "sleeper_status"
+
+
+def norm_name(s: str | None) -> str:
+    """Squash a display name to a join key.
+
+    Sleeper's `gsis_id` is only populated for ~16% of rostered skill players (and
+    some of those carry stray whitespace), so name+position is the real join --
+    it matches 88% with zero collisions across the 2026 skill pool.
+    """
+    s = (s or "").lower()
+    for suffix in (" jr", " sr", " ii", " iii", " iv", " v"):
+        if s.endswith(suffix) or s.endswith(suffix + "."):
+            s = s[: -len(suffix)]
+    return "".join(ch for ch in s if ch.isalpha())
+
+
+def live_rows(players: dict) -> list[dict]:
+    """Sleeper's player blob -> availability rows. Pure; `players` is the JSON."""
+    import datetime as dt
+
+    out = []
+    for v in (players or {}).values():
+        if not isinstance(v, dict):
+            continue
+        # Every player on an NFL roster, NOT just the ones we rank: a suspended
+        # left tackle never scores a fantasy point but still costs the backfield
+        # behind him (see draft.line_context). Sleeper ships literal "Duplicate
+        # Player" placeholder rows -- drop those.
+        if not v.get("team") or not v.get("position"):
+            continue
+        if v.get("full_name") == "Duplicate Player":
+            continue
+        gsis = (v.get("gsis_id") or "").strip() or None
+        updated = v.get("news_updated")
+        if updated:
+            updated = dt.datetime.fromtimestamp(updated / 1000).date().isoformat()
+        out.append({
+            "gsis_id": gsis,
+            "name_key": norm_name(v.get("full_name")),
+            "position": v.get("position"),
+            "team": v.get("team"),
+            "live_code": v.get("injury_status") or None,
+            "live_body": v.get("injury_body_part") or None,
+            "live_note": v.get("injury_notes") or None,
+            "news_date": updated,
+        })
+    return out
+
+
+def refresh_live_status(client: "SleeperClient | None" = None, force: bool = False,
+                        log=print) -> int:
+    """Pull Sleeper's live feed into the lake as the `sleeper_status` view.
+
+    This is the ONLY thing here that touches the network, and it is an explicit
+    ingest step -- the draft board reads the cached parquet and never fetches, so
+    it stays fast and works offline. Returns the row count written (0 if the
+    cache was still fresh).
+    """
+    import time
+
+    import pandas as pd
+
+    from .db import RAW
+
+    dest = RAW / _LIVE_DATASET / f"{_LIVE_DATASET}.parquet"
+    if dest.exists() and not force:
+        age_h = (time.time() - dest.stat().st_mtime) / 3600
+        if age_h < LIVE_TTL_HOURS:
+            log(f"  skip  {_LIVE_DATASET} (fresh, {age_h:.1f}h old)")
+            return 0
+
+    rows = live_rows((client or SleeperClient()).players())
+    df = pd.DataFrame(rows, columns=["gsis_id", "name_key", "position", "team",
+                                     "live_code", "live_body", "live_note", "news_date"])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(dest, index=False)
+    flagged = int(df["live_code"].notna().sum())
+    log(f"  ok    {_LIVE_DATASET}: {len(df):,} players, {flagged} flagged")
+    return len(df)

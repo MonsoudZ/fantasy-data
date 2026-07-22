@@ -135,6 +135,7 @@
     font-size:11.5px; line-height:1.5; color:var(--text); pointer-events:none; }
   #tip .t-hd { font-weight:800; margin-bottom:3px; }
   #tip .t-sub { color:var(--muted); }
+  #tip .t-as { opacity:.65; font-size:10.5px; }
   .draftbtn { border:1px solid var(--line); background:#0e1530; color:var(--accent2); font-weight:700;
     font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer; }
   .draftbtn:hover { background:var(--accent); color:#fff; border-color:transparent; }
@@ -555,7 +556,15 @@ function renderBoard(){
     if(!j && !ln) return "";
     const L = [];
     if(j){
-      if(j.status) L.push(`Currently <b>${j.status}</b>`);
+      // Live (Sleeper) first -- it's the only line here that knows about today.
+      if(j.live){
+        const bits = [`Right now: <b>${j.live}</b>`];
+        if(j.body) bits.push(j.body);
+        if(j.note) bits.push(j.note);
+        L.push(bits.join(" — "));
+        if(j.asof) L.push(`<span class="t-as">reported ${j.asof}</span>`);
+      }
+      if(j.status) L.push(`Roster status: <b>${j.status}</b>`);
       if(j.injury){
         const rd = j.round && j.round!=="REG" ? ` (${j.round})` : "";
         L.push(`Last ruled out wk ${j.week}${rd} — <b>${j.injury}</b>`);
@@ -574,7 +583,7 @@ function renderBoard(){
         : `One out measured as no effect — noted, not a downgrade.`);
     }
     if(!L.length) return "";
-    const sev = (j && (j.status || j.ended_hurt)) || (ln && ln.out>=2);
+    const sev = (j && (j.live_severe || j.status || j.ended_hurt)) || (ln && ln.out>=2);
     const body = `<div class="t-hd">Availability</div><div class="t-sub">${L.join("<br>")}</div>`;
     return `<span class="inj-badge${sev?" sev":""}" data-tip="${body.replace(/"/g,"&quot;")}">i</span>`;
   };

@@ -29,6 +29,9 @@ def main() -> None:
     p.add_argument("--datasets", nargs="*", default=default_datasets, choices=list(SOURCES))
     p.add_argument("--pbp", action="store_true", help="include play-by-play")
     p.add_argument("--force", action="store_true", help="re-download cached files")
+    p.add_argument("--live", action="store_true",
+                   help="also refresh Sleeper's live availability feed (today's "
+                        "IR/PUP/suspensions); nflverse only knows last season")
     args = p.parse_args()
 
     datasets = list(args.datasets)
@@ -38,6 +41,16 @@ def main() -> None:
     seasons = parse_seasons(args.seasons)
     print(f"Ingesting {datasets} for seasons {seasons[0]}-{seasons[-1]}")
     failures = ingest(datasets, seasons, force=args.force)
+
+    if args.live:
+        from .sleeper import refresh_live_status
+        print("Refreshing live availability (Sleeper)")
+        try:
+            refresh_live_status(force=args.force)
+        except Exception as exc:  # noqa: BLE001 - a live extra must never fail ingest
+            print(f"  FAIL  sleeper_status: {exc}", file=sys.stderr)
+            failures.append(("sleeper_status", str(exc)))
+
     if failures:
         print(f"\n{len(failures)} download(s) failed:", file=sys.stderr)
         for target, err in failures:

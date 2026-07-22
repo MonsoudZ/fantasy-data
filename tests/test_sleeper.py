@@ -6,6 +6,9 @@ the import orchestration via an injected fake client.
 """
 
 from ffdata.scoring import HALF_PPR, PPR, preset_name, rules_from, rules_to_dict
+import datetime as dt
+
+from ffdata.sleeper import LIVE_SEVERE, LIVE_STATUS, live_rows, norm_name  # noqa: F401
 from ffdata.sleeper import (
     import_league, list_user_leagues, map_roster, map_roster_positions, map_scoring,
 )
@@ -136,3 +139,78 @@ def test_import_league_builds_league_and_team():
     assert team.roster["DEF"] == ["BUF DST"]
     assert team.rules == league.rules
     team.validated()                                # roster normalizes, no raise
+
+
+# --------------------------------------------------------------------------- #
+# Live availability feed
+# --------------------------------------------------------------------------- #
+
+def _blob(**over):
+    base = {"team": "SF", "position": "WR", "full_name": "Test Player",
+            "gsis_id": "00-0011111", "injury_status": None, "injury_body_part": None,
+            "injury_notes": None, "news_updated": None}
+    base.update(over)
+    return base
+
+
+def test_live_rows_keeps_every_position_not_just_skill():
+    """A suspended left tackle scores no fantasy points but still costs the
+    backfield behind him (draft.line_context), so linemen must survive here."""
+    rows = live_rows({
+        "1": _blob(position="WR"),
+        "2": _blob(position="T", full_name="Big Fella", injury_status="IR"),
+        "3": _blob(position="CB", full_name="A Corner", injury_status="Sus"),
+    })
+    assert {r["position"] for r in rows} == {"WR", "T", "CB"}
+
+
+def test_live_rows_drops_free_agents_and_duplicate_placeholders():
+    """Sleeper ships literal "Duplicate Player" rows, and players with no team
+    aren't on anyone's roster."""
+    rows = live_rows({
+        "1": _blob(),
+        "2": _blob(team=None, full_name="Free Agent"),
+        "3": _blob(full_name="Duplicate Player"),
+    })
+    assert [r["name_key"] for r in rows] == ["testplayer"]
+
+
+def test_live_rows_cleans_the_unreliable_gsis_id():
+    """Sleeper populates gsis_id for only ~16% of rostered players, and some of
+    those carry stray whitespace -- which would silently never join."""
+    rows = live_rows({
+        "1": _blob(gsis_id=" 00-0035645 "),
+        "2": _blob(gsis_id="", full_name="No Id"),
+    })
+    assert rows[0]["gsis_id"] == "00-0035645"
+    assert rows[1]["gsis_id"] is None
+
+
+def test_live_rows_carries_the_suspension_code():
+    """The whole point: nflverse's roster status has had ZERO suspensions since
+    2021, so `injury_status = Sus` is the only live source we have."""
+    rows = live_rows({"1": _blob(injury_status="Sus", injury_body_part="Suspension")})
+    assert rows[0]["live_code"] == "Sus"
+    assert LIVE_STATUS["Sus"] == "suspended" and "Sus" in LIVE_SEVERE
+    # Soft designations must not count as a hard absence.
+    assert "Questionable" in LIVE_STATUS and "Questionable" not in LIVE_SEVERE
+
+
+def test_live_rows_dates_the_report():
+    """Without a date a stale flag is indistinguishable from a current one."""
+    ts = int(dt.datetime(2026, 7, 22, 12, 0).timestamp() * 1000)
+    rows = live_rows({"1": _blob(injury_status="IR", news_updated=ts)})
+    assert rows[0]["news_date"] == "2026-07-22"
+
+
+def test_norm_name_handles_the_suffixes_that_break_a_name_join():
+    assert norm_name("Brian Thomas Jr.") == norm_name("Brian Thomas")
+    assert norm_name("Marvin Harrison Jr.") == "marvinharrison"
+    assert norm_name("Ja'Marr Chase") == "jamarrchase"
+    assert norm_name(None) == ""
+
+
+def test_live_rows_tolerates_junk_entries():
+    assert live_rows({"1": "not a dict", "2": None}) == []
+    assert live_rows({}) == []
+    assert live_rows(None) == []

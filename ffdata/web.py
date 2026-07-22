@@ -35,7 +35,7 @@ from .optimize import (
 )
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD, preset_name, rules_from, rules_to_dict
-from .sleeper import import_league, list_user_leagues
+from .sleeper import LIVE_SEVERE, LIVE_STATUS, import_league, list_user_leagues
 from .store import (
     League, Team, delete_league, delete_team, list_leagues, list_teams,
     save_league, save_team,
@@ -371,8 +371,15 @@ def _player_ctx(season: int) -> dict:
             "round": (None if pd.isna(r["last_round"]) else str(r["last_round"])),
             "ended_hurt": bool(r["ended_hurt"]),
             "status": (None if pd.isna(r["status"]) else str(r["status"])),
+            # Live, from Sleeper -- what's true today rather than last December.
+            "live": (None if pd.isna(r["live_code"])
+                     else LIVE_STATUS.get(r["live_code"], str(r["live_code"]))),
+            "live_severe": r["live_code"] in LIVE_SEVERE,
+            "body": (None if pd.isna(r["live_body"]) else str(r["live_body"])),
+            "note": (None if pd.isna(r["live_note"]) else str(r["live_note"])),
+            "asof": (None if pd.isna(r["news_date"]) else str(r["news_date"])),
         }
-        if inj["injury"] or inj["status"]:
+        if inj["injury"] or inj["status"] or inj["live"]:
             out[r["player_id"]]["inj"] = inj
         # Only on RBs, and only when someone's actually down -- see line_context.
         if int(r["ol_out"] or 0):

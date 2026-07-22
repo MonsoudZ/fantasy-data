@@ -13,7 +13,8 @@ bash scripts/setup.sh          # installs deps + ingests data + runs tests
 Or manually: `pip install -r requirements-dev.txt` (add `torch` for the neural
 model, `fastapi "uvicorn[standard]"` for the web UI), then
 `python -m ffdata.cli --seasons 2019-2025` and
-`python -m ffdata.cli --datasets rosters --seasons 2026` (for a 2026 draft).
+`python -m ffdata.cli --datasets rosters --seasons 2026` (for a 2026 draft),
+plus `python -m ffdata.cli --live` for today's IR/PUP/suspension feed.
 Network access required (nflverse pulls over HTTP).
 
 ## Layout (`ffdata/`)
@@ -36,7 +37,7 @@ Network access required (nflverse pulls over HTTP).
 | `draft.py` | preseason season projections, VOR, snake/auction, keepers, trades, rookies |
 | `dynasty.py` | age curves (delta method) + multi-year dynasty value |
 | `store.py` | JSON persistence for saved leagues + lineup teams (incl. custom scoring) |
-| `sleeper.py` | import a league from Sleeper's public API (settings, scoring, roster, draft) |
+| `sleeper.py` | import a league from Sleeper's public API; **live availability feed** (today's IR/PUP/suspensions) |
 | `advice.py` | grounded Claude explanations of compare/keeper/trade decisions (opt-in) |
 | `web.py` `static/index.html` | FastAPI + tabbed UI |
 
@@ -159,14 +160,35 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   medical one, so as a feature it would mostly fit team reporting habits.
   `rosters` is **weekly** (a player goes ACT→DEV→INA within a season), so status
   must come from his LAST known week — `any_value()` reports a status he left.
-- **Suspensions and holdouts are not in this data.** `rosters.status` has the
-  right codes (`SUS`, `RSN` = did not report, `NWT` = not with team) and nflverse
-  populated them densely in 2019–20 (187/228/177 players in 2019) — then stopped:
-  **one** SUS row in 2022, zero in 2021 and 2023–26. They're mapped in
-  `_INACTIVE_STATUS` because they're correct where data exists, but a suspension
-  or holdout will **not** surface for a current draft. Don't read an empty flag as
-  "nobody is suspended", and don't build a feature on it. No other ingested source
-  carries transactions.
+- **Suspensions live in Sleeper, not nflverse** (`sleeper.refresh_live_status` →
+  the `sleeper_status` view → `draft._live_status`). nflverse's `rosters.status`
+  has the right codes (`SUS`, `RSN` = did not report, `NWT` = not with team) and
+  was populated densely in 2019–20 (187/228/177 players in 2019) — then stopped:
+  **one** SUS row in 2022, zero in 2021 and 2023–26. They're still mapped in
+  `_INACTIVE_STATUS` (correct where data exists) but will never fire on a current
+  draft. Sleeper's public API fills the gap and is the only source here that knows
+  about **today**:
+  - Suspensions are under **`injury_status = "Sus"`**, *not* the top-level
+    `status` field, which only ever reads Active/Inactive. Also `DNR` (did not
+    report), `IR`, `PUP`, `NA`, `COV`, `Out`, `Questionable`.
+  - **Do not join on `gsis_id`** — Sleeper populates it for only ~16% of rostered
+    players and some carry stray whitespace. Join on name+position: 88% with zero
+    collisions. Both sides must go through `sleeper.norm_name` (it strips Jr./Sr./
+    numeral suffixes) or the keys drift.
+  - Sleeper ships literal **"Duplicate Player"** placeholder rows — drop them.
+  - `news_updated` dates each record (73 of 76 flags were current when added), so
+    a stale flag is distinguishable from a live one. `injury_start_date` is always
+    empty — don't rely on it.
+  - Kept for **every position**, not just skill: a suspended tackle feeds
+    `line_context`. Refresh with `python -m ffdata.cli --live` (12h TTL; Sleeper
+    asks for ≤1 call/day). The board reads the cached view and never fetches, so
+    it stays fast and works offline.
+  - Complementary, not a replacement: nflverse tells you how last season *ended*,
+    Sleeper what's true *now*. De'Von Achane reads "ruled out wk 18, shoulder" from
+    one and "questionable — Shoulder — Surgery, reported 2026-07-19" from the other.
+  - Honest caveat: right now that's **2 suspended players, both defensive**, so
+    the suspension flag shows nothing on a fantasy board today. The live *injury*
+    feed is where the value is (Mahomes: Knee-ACL/Surgery; 20 PUP, 18 IR).
 - **The offensive line matters, but only past a threshold** (`draft.line_context`).
   Linemen never appear in `weekly` (ingest keeps skill positions), but
   `depth_charts` + `injuries` carry every position, so the unit is recoverable.
