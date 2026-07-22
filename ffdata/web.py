@@ -21,10 +21,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .draft import DEFAULT_LEAGUE, best_available, draft_board, keeper_value, trade_value
+from .dynasty import dynasty_board
 from .features import build_features
 from .ingest import FIRST_SEASON, current_nfl_season
 from .matchup import MatchupSimulator
-from .optimize import LineupOptimizer, _assemble, _match
+from .optimize import LineupOptimizer, _assemble, _match, _norm
 from .props import price_props
 from .scoring import PPR, HALF_PPR, STANDARD, rules_from
 from .sleeper import import_league, list_user_leagues
@@ -39,6 +40,7 @@ _RULES = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}
 _SIMS: dict = {}
 _BOARDS: dict = {}
 _DRAFT: dict = {}
+_DYN: dict = {}
 _FEATS: dict = {}
 _STATIC = Path(__file__).parent / "static"
 
@@ -300,6 +302,81 @@ def api_trade(req: TradeRequest):
     if not req.side_a and not req.side_b:
         return {"ok": False, "error": "Add players to at least one side."}
     return {"ok": True, **trade_value(board, req.side_a, req.side_b)}
+
+
+class CompareRequest(BoardRequest):
+    players: list[str] = []
+
+
+@app.post("/api/compare")
+def api_compare(req: CompareRequest):
+    board, err = _board_or_error(req)
+    if err:
+        return err
+    names = [n for n in req.players if str(n).strip()][:3]
+    if len(names) < 2:
+        return {"ok": False, "error": "Pick at least 2 players to compare."}
+
+    # draft_board is sorted by VOR desc, so row order == overall rank; positional
+    # rank is the running count within each position in that same order.
+    board = board.reset_index(drop=True)
+    rows, pos_seen = {}, {}
+    for i, r in board.iterrows():
+        pos_seen[r["position"]] = pos_seen.get(r["position"], 0) + 1
+        rows[_norm(r["player"])] = (int(i) + 1, pos_seen[r["position"]], r)
+
+    out, missing = [], []
+    for name in names:
+        hit = rows.get(_norm(name))
+        if hit is None:
+            missing.append(name)
+            continue
+        overall, pos_rank, r = hit
+        out.append({"player": r["player"], "position": r["position"],
+                    "proj": round(float(r["proj"]), 1), "vor": round(float(r["vor"]), 1),
+                    "auction": int(r["auction"]),
+                    "overall_rank": overall, "position_rank": pos_rank})
+    if not out:
+        return {"ok": False, "error": "None of those players are on the board.", "missing": missing}
+    best = max(out, key=lambda p: p["vor"])["player"]     # highest VOR = best value
+    return {"ok": True, "players": out, "best_value": best, "missing": missing}
+
+
+class DynastyRequest(BoardRequest):
+    years: int = Field(4, ge=1, le=10)
+    discount: float = Field(0.85, ge=0.5, le=1.0)
+    drafted: list[str] = []
+    position: str | None = None
+    n: int = Field(50, ge=1, le=500)
+
+
+@app.post("/api/dynasty")
+def api_dynasty(req: DynastyRequest):
+    if req.scoring not in _RULES and not req.rules:
+        return {"ok": False, "error": "bad scoring"}
+    key = (req.season, req.teams, _scoring_key(req.scoring, req.rules),
+           _lineup_key(req.lineup), req.years, req.discount)
+    try:
+        if key not in _DYN:
+            _cache_put(_DYN, key, dynasty_board(
+                req.season, years=req.years, discount=req.discount,
+                rules=rules_from(req.scoring, req.rules),
+                league=_league_cfg(req.teams, req.lineup)))
+    except Exception:  # noqa: BLE001 - log detail server-side, keep the UI generic
+        _log.exception("dynasty_board failed (season=%s)", req.season)
+        return {"ok": False, "error": "could not build the dynasty board (see server logs)"}
+    board = _DYN[key]
+    if board.empty:
+        return {"ok": False, "error": f"No dynasty data for {req.season}. Ingest it first."}
+    taken = {_norm(x) for x in (req.drafted or [])}
+    out = board[~board["player"].map(lambda s: _norm(s) in taken)]
+    if req.position:
+        out = out[out["position"] == req.position]
+    players = [{"player": r["player"], "position": r["position"], "age": int(r["age"]),
+                "proj": round(float(r["proj"]), 1), "vor": round(float(r["vor"]), 1),
+                "dynasty_value": round(float(r["dynasty_value"]), 1)}
+               for _, r in out.head(req.n).iterrows()]
+    return {"ok": True, "count": len(players), "total": len(board), "players": players}
 
 
 class PropsRequest(BaseModel):

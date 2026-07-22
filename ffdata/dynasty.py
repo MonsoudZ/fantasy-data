@@ -69,14 +69,16 @@ def age_curves(con=None, before_season: int | None = None,
 
 
 def dynasty_board(target_season: int, years: int = 4, discount: float = 0.85,
-                  rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+                  rules: ScoringRules = PPR, league: dict | None = None,
+                  con=None) -> pd.DataFrame:
     """Rank players by dynasty value = discounted, age-curve-projected redraft value.
 
-    `rules` sets the league scoring (default PPR); the underlying draft board and
-    the age curves are both built under it.
+    `rules` sets the league scoring (default PPR); `league` sets the lineup shape
+    (teams/starters/flex/superflex) so the underlying VOR matches your league --
+    both the draft board and the age curves are built under them.
     """
     con = con or connect()
-    board = draft_board(target_season, rules=rules, con=con)
+    board = draft_board(target_season, league=league, rules=rules, con=con)
     if board.empty:
         return board
     curves = age_curves(con, before_season=target_season, rules=rules)

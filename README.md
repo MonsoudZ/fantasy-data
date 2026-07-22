@@ -172,8 +172,10 @@ A polished, tabbed browser front-end over the whole toolkit:
   optimizes over every player (DFS). Save your roster/scoring/model as a **team**.
 - **Draft board** — a live, VOR/auction-ranked board; click "Draft" to mark
   players gone and best-available updates instantly. Save the setup as a **league**.
-  **Keeper & trade** tools sit under the board: keeper surplus (value − cost, by
-  auction $ or draft round) and trade evaluation (value per side + a verdict).
+  A **Redraft / Dynasty** toggle switches to multi-year, age-curve-adjusted values.
+  Tools under the board: **keeper** surplus (value − cost, by auction $ or draft
+  round), **trade** evaluation (value per side + verdict), and **compare** up to
+  3 players side by side (proj / VOR / auction / rank, best-value flagged).
 - **Prop edges** — paste sportsbook prop lines, get the +EV bets ranked.
 
 Saved leagues and teams persist locally (`~/.ff-data/`, or `$FFDATA_STATE`), so

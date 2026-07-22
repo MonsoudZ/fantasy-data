@@ -183,6 +183,59 @@ def test_keepers_and_trades_endpoints(monkeypatch):
     assert c.post("/api/trade", json={"season": 2099}).json()["error"].startswith("Add players")
 
 
+def test_compare_endpoint(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    board = pd.DataFrame({                               # already VOR-desc sorted
+        "player": ["Ja'Marr Chase", "Bijan Robinson", "Josh Allen", "CeeDee Lamb"],
+        "position": ["WR", "RB", "QB", "WR"],
+        "proj": [280.0, 270.0, 360.0, 260.0],
+        "vor": [80.0, 70.0, 60.0, 55.0],
+        "auction": [55, 50, 20, 45],
+    })
+    monkeypatch.setattr(web, "draft_board", lambda *a, **k: board)
+    web._DRAFT.clear()
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+
+    r = c.post("/api/compare", json={"season": 2099,
+                                     "players": ["Ja'Marr Chase", "CeeDee Lamb", "Josh Allen"]}).json()
+    assert r["ok"]
+    by = {p["player"]: p for p in r["players"]}
+    assert by["Ja'Marr Chase"]["overall_rank"] == 1 and by["Ja'Marr Chase"]["position_rank"] == 1
+    assert by["CeeDee Lamb"]["overall_rank"] == 4 and by["CeeDee Lamb"]["position_rank"] == 2  # WR2
+    assert r["best_value"] == "Ja'Marr Chase"           # highest VOR
+    assert c.post("/api/compare", json={"season": 2099,
+                                        "players": ["Josh Allen"]}).json()["error"].startswith("Pick at least")
+
+
+def test_dynasty_endpoint(monkeypatch):
+    import pandas as pd
+
+    import ffdata.web as web
+    dboard = pd.DataFrame({
+        "player": ["Young Stud", "Aging Vet"], "position": ["RB", "WR"],
+        "age": [24, 30], "proj": [230.0, 210.0], "vor": [70.0, 60.0],
+        "dynasty_value": [180.0, 90.0],
+    })
+    monkeypatch.setattr(web, "dynasty_board", lambda *a, **k: dboard)
+    web._DYN.clear()
+
+    from fastapi.testclient import TestClient
+    c = TestClient(web.app)
+
+    r = c.post("/api/dynasty", json={"season": 2099, "teams": 12, "years": 4}).json()
+    assert r["ok"] and r["players"][0]["dynasty_value"] == 180.0
+    assert r["players"][0]["age"] == 24
+    # drafted filter applies
+    r2 = c.post("/api/dynasty", json={"season": 2099, "drafted": ["Young Stud"]}).json()
+    assert all(p["player"] != "Young Stud" for p in r2["players"])
+    # out-of-range knobs rejected by pydantic
+    assert c.post("/api/dynasty", json={"season": 2099, "years": 99}).status_code == 422
+
+
 def test_sleeper_import_endpoints(tmp_path, monkeypatch):
     monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
     import ffdata.web as web

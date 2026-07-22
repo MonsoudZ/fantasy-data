@@ -208,6 +208,9 @@
           <div class="drafted" id="d-drafted"><span class="hint">Click “Draft” on a player to remove them. Best-available updates live.</span></div>
         </div>
         <div class="card">
+          <div class="seg" id="d-mode" style="margin-bottom:12px">
+            <button data-v="redraft" class="on">Redraft</button><button data-v="dynasty">Dynasty (multi-year)</button>
+          </div>
           <div class="filterbar" id="d-filters"></div>
           <div class="search" style="margin-bottom:12px"><input type="text" id="d-search" placeholder="🔍 filter players…" autocomplete="off" /></div>
           <div class="scroll" id="d-board"><div class="empty">Load the board to see VOR-ranked best-available.</div></div>
@@ -215,6 +218,7 @@
             <div class="filterbar">
               <button class="fchip on" data-kt="keepers">Keepers</button>
               <button class="fchip" data-kt="trade">Trade</button>
+              <button class="fchip" data-kt="compare">Compare</button>
             </div>
             <div id="kt-keepers">
               <div class="hint">One per line: <b>player, cost</b> — cost is auction $ or a draft round. Surplus = value − cost.</div>
@@ -232,6 +236,12 @@
               </div>
               <button class="draftbtn" id="kt-trade-go" style="margin-top:8px">Evaluate trade</button>
               <div id="kt-trade-out" style="margin-top:12px"></div>
+            </div>
+            <div id="kt-compare" style="display:none">
+              <div class="hint">Up to 3 players, one per line — compared on projection, VOR, auction $, and rank.</div>
+              <textarea id="kt-compare-lines" placeholder="Ja'Marr Chase&#10;Bijan Robinson&#10;Josh Allen" style="min-height:70px"></textarea>
+              <button class="draftbtn" id="kt-compare-go" style="margin-top:8px">Compare</button>
+              <div id="kt-compare-out" style="margin-top:12px"></div>
             </div>
           </div>
         </div>
@@ -371,26 +381,37 @@ function renderLineup(d){
 }
 
 /* ============ DRAFT ============ */
-const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null, lineup:null };
+const D = { board:[], drafted:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null, lineup:null, mode:"redraft" };
 seg("d-scoring", v=>{ D.scoring=v; D.rules=null; if(D.board.length) loadDraft(); });   // preset clears any custom rules
+seg("d-mode", v=>{ D.mode=v; if(D.board.length) loadDraft(); });
 async function loadDraft(){
-  const btn=$("#d-go"); btn.disabled=true; btn.textContent="Loading…";
-  $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>Training season model…</div>`;
+  const btn=$("#d-go"), dyn=D.mode==="dynasty";
+  btn.disabled=true; btn.textContent="Loading…";
+  $("#d-board").innerHTML=`<div class="spinner"><div class="ring"></div>${dyn?"Building dynasty values":"Training season model"}…</div>`;
+  const body={ ...dcfg(), n:300 };
+  if(dyn){ body.years=4; body.discount=0.85; }
   try{
-    const d=await (await fetch("/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({season:+$("#d-season").value,teams:+$("#d-teams").value,scoring:D.scoring,rules:D.rules,lineup:D.lineup,n:300})})).json();
+    const d=await (await fetch(dyn?"/api/dynasty":"/api/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
     if(!d.ok){ $("#d-board").innerHTML=`<div class="err">${d.error}</div>`; }
     else { D.board=d.players; renderFilters(); renderBoard(); }
   }catch(e){ $("#d-board").innerHTML=`<div class="err">${e}</div>`; }
-  btn.disabled=false; btn.textContent="Reload draft board";
+  btn.disabled=false; btn.textContent="Reload board";
 }
 $("#d-go").onclick=loadDraft;
 function renderFilters(){ $("#d-filters").innerHTML=["ALL","QB","RB","WR","TE"].map(p=>`<button class="fchip ${p===D.pos?'on':''}" data-p="${p}">${p}</button>`).join("");
   document.querySelectorAll("#d-filters .fchip").forEach(b=>b.onclick=()=>{ D.pos=b.dataset.p; renderFilters(); renderBoard(); }); }
 $("#d-search").oninput=e=>{ D.q=e.target.value.trim(); renderBoard(); };
 function renderBoard(){
+  const dyn=D.mode==="dynasty";
   const rows=D.board.filter(p=>!D.drafted.has(norm(p.player)) && (D.pos==="ALL"||p.position===D.pos) && (!D.q||norm(p.player).includes(norm(D.q)))).slice(0,120);
-  $("#d-board").innerHTML=`<table><thead><tr><th>#</th><th>Player</th><th></th><th class="num">Proj</th><th class="num">VOR</th><th class="num">$</th><th></th></tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}</td><td><span class="pos ${p.position}">${p.position}</span></td><td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td><td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`).join("")}</tbody></table>`;
+  const head=dyn
+    ? `<th>#</th><th>Player</th><th></th><th class="num">Age</th><th class="num">Proj</th><th class="num">VOR</th><th class="num">Dyn</th><th></th>`
+    : `<th>#</th><th>Player</th><th></th><th class="num">Proj</th><th class="num">VOR</th><th class="num">$</th><th></th>`;
+  const cells=p=>dyn
+    ? `<td class="num">${p.age}</td><td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num" style="color:var(--good)">${p.dynasty_value.toFixed(0)}</td>`
+    : `<td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td>`;
+  $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
@@ -465,10 +486,23 @@ const KT = { costType:"auction" };
 function dcfg(){ return { season:+$("#d-season").value, teams:+$("#d-teams").value, scoring:D.scoring, rules:D.rules, lineup:D.lineup }; }
 document.querySelectorAll("#kt .fchip[data-kt]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#kt .fchip[data-kt]").forEach(x=>x.classList.remove("on")); b.classList.add("on");
-  $("#kt-keepers").style.display = b.dataset.kt==="keepers"?"block":"none";
-  $("#kt-trade").style.display = b.dataset.kt==="trade"?"block":"none";
+  ["keepers","trade","compare"].forEach(k=>{ const el=$("#kt-"+k); if(el) el.style.display = b.dataset.kt===k?"block":"none"; });
 });
 seg("kt-costtype", v=>{ KT.costType=v; });
+$("#kt-compare-go").onclick=async()=>{
+  const players=$("#kt-compare-lines").value.trim().split("\n").map(s=>s.trim()).filter(Boolean).slice(0,3);
+  if(players.length<2){ $("#kt-compare-out").innerHTML=`<div class="warn">Enter at least 2 players.</div>`; return; }
+  $("#kt-compare-out").innerHTML=`<div class="spinner"><div class="ring"></div>Comparing…</div>`;
+  try{
+    const d=await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...dcfg(), players})})).json();
+    if(!d.ok){ $("#kt-compare-out").innerHTML=`<div class="err">${d.error}</div>`; return; }
+    const card=p=>`<div class="card" style="flex:1;padding:14px;${p.player===d.best_value?'border-color:var(--good)':''}">
+      <div class="pname">${p.player}${p.player===d.best_value?' <span class="lab" style="color:var(--good);text-transform:uppercase;font-size:10px">best value</span>':''}</div>
+      <div style="margin:8px 0"><span class="pos ${p.position}">${p.position}</span> <span class="team">${p.position}${p.position_rank} · #${p.overall_rank} overall</span></div>
+      <div class="hint">Proj <b style="color:var(--text)">${p.proj}</b> · VOR <b style="color:var(--accent2)">${p.vor}</b> · $${p.auction}</div></div>`;
+    $("#kt-compare-out").innerHTML=`<div class="row">${d.players.map(card).join("")}</div>${d.missing&&d.missing.length?`<div class="warn" style="margin-top:8px">Not on board: ${d.missing.join(", ")}</div>`:""}`;
+  }catch(e){ $("#kt-compare-out").innerHTML=`<div class="err">Request failed.</div>`; }
+};
 $("#kt-keeper-go").onclick=async()=>{
   const keepers=$("#kt-keeper-lines").value.trim().split("\n")
     .map(l=>{ const p=l.split(","); return p.length>=2?[p[0].trim(), parseFloat(p[1])]:null; })
