@@ -184,6 +184,45 @@ trade_value(b, ["Ja'Marr Chase", "George Kittle"], ["CeeDee Lamb"])           # 
   gracefully. Dynasty value is VOR projected forward over `--years` and
   discounted, so youth is rewarded (Nacua over an equal-value older WR).
 
+### Backtest: draft blind, replay the real season
+
+```bash
+python -m ffdata.backtest_draft --season 2024 --sims 200        # our title rate vs a naive league
+python -m ffdata.backtest_draft --season 2024 --sims 200 --props  # + prop-accuracy calibration
+```
+
+The honest end-to-end test of the whole stack: **can we actually draft a
+championship team, knowing only what we'd know before the season?** For each of
+`--sims` random draft slots, it drafts our team from the preseason `draft_board`
+(prior-year features only — it never peeks at how the season went) while the
+other managers draft off a naive "last year's points" board, then **replays the
+season's real weekly results** — setting each week's lineup the same way the app
+would — through a round-robin schedule and single-elimination playoffs to crown a
+champion. Because it randomizes the draft slot, you get a **title rate and
+playoff rate**, not one lucky run. Every sim also runs a control where our slot
+drafts naively too, so the reported **lift** isolates what our value model adds
+over "just take last year's studs" on identical schedules:
+
+```text
+Draft-and-win backtest — 2024 — 200 sims, 12-team league
+                   OUR board   naive board
+  title rate           0.121         0.083     ← vs the 0.083 coin-flip baseline
+  playoff rate          0.58          0.50
+  mean finish           5.6           6.5
+  Our value model's lift: +0.038 title rate, +0.08 playoff rate.
+```
+
+*(illustrative numbers — see the caveat.)* `--props` adds a prop-accuracy table:
+per-market projection MAE and P(over) interval calibration, out of sample. Since
+nflverse ships no odds, hit-rate-against-the-book can't be computed — calibration
+(is our 60%-over actually 60%?) is the honest stand-in.
+
+**Caveat:** the simulation engine is unit-tested, but the *numbers* a real run
+prints are only as trustworthy as the projections feeding them, and this couldn't
+be run against a real season in the build environment (no data lake). Leak-free
+is guaranteed by construction — the draft is built before the weekly results are
+ever loaded — but validate the magnitudes on your own ingested data.
+
 ### Web UI
 
 ```bash

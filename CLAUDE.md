@@ -29,6 +29,7 @@ Network access required (nflverse pulls over HTTP).
 | `correlation.py` | Gaussian copula for same-game correlation |
 | `optimize.py` | lineup optimizer (h2h / tournament / stack), superflex + DEF/K slots, free-agent finder + weekly CLI |
 | `kdst.py` | kicker + team-defense (DST) scoring & leak-free trailing projections |
+| `backtest_draft.py` | retrospective draft-and-win backtest: draft blind, replay the real season |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
@@ -110,6 +111,24 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the table can never disagree. ⚠️ Prompt assembly + the availability gate are
   unit-tested with a mocked client; the **live API path is unvalidated** (no egress
   when built) — confirm once you set a key.
+- **Draft-and-win backtest** (`backtest_draft.py`, `python -m ffdata.backtest_draft
+  --season 2024 --sims 200`): the honest end-to-end test of the stack. Drafts a
+  team from `draft_board(season)` (preseason, leak-free) while the other managers
+  draft off a **naive last-year-points** board, then replays the season's ACTUAL
+  weekly results — setting each week's lineup with the same greedy fill the
+  optimizer uses — through a round-robin schedule + single-elim playoffs to a
+  champion. Randomizes the draft slot over `sims` runs → a title/playoff *rate*,
+  not one lucky season. Each sim also runs a control where our slot drafts naively
+  too, so the reported **lift** (title-rate, playoff-rate, mean-finish) isolates
+  what our value model adds over the baseline on identical schedules. Leak-free by
+  construction: the draft never sees the weekly points. The pure sim engine
+  (`snake_order`/`run_snake_draft`/`best_week_total`/`replay`/`round_robin`/
+  `standings`/`playoffs`/`simulate_season`) is unit-tested; **`run_backtest` needs
+  the lake and is unvalidated here** (no data) — and its numbers are only as good
+  as the projections feeding it. `prop_accuracy(season)` reports per-market
+  projection MAE + P(over) calibration (reusing the prop engine); hit-rate-vs-book
+  can't be computed (nflverse ships no odds), so calibration is the honest stand-
+  in. Scope: K/DEF aren't drafted (streamed), so the sim uses the skill board.
 - **Kicker + team defense (K/DST)** (`kdst.py`): standard leagues start a K and a
   DEF (QB/RB/RB/WR/WR/TE/FLEX/DEF/K), so the app scores and projects them.
   `ScoringRules` gained kicker (distance-laddered FG + PAT + miss) and DST (sack/
