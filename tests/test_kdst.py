@@ -8,6 +8,7 @@ module docstring); this proves the arithmetic and the leak-free window.
 
 import pandas as pd
 
+from conftest import requires_data_lake
 from ffdata.kdst import (
     _dst_pa_points, _trailing_pred, project_kdst, score_dst, score_kicker,
 )
@@ -56,10 +57,36 @@ def test_trailing_pred_window_caps_history():
     assert _trailing_pred(scored, "team", 2024, 4, window=2)["pred"].iloc[0] == 15.0
 
 
-def test_project_kdst_degrades_to_empty_without_a_lake():
-    board = project_kdst(2024, 5)          # no data/ dir in the test env
+def test_project_kdst_degrades_to_empty_without_a_lake(monkeypatch):
+    """Simulate a missing lake explicitly -- don't rely on the ambient env, or
+    this passes in CI and fails on any machine that has ingested data."""
+    import ffdata.kdst as kdst
+
+    def _no_lake():
+        raise FileNotFoundError("no data lake")
+    monkeypatch.setattr(kdst, "connect", _no_lake)
+    board = project_kdst(2024, 5)
     assert board.empty
     assert list(board.columns) == ["player_display_name", "position", "pred", "recent_team"]
+
+
+@requires_data_lake
+def test_project_kdst_projects_real_kickers_and_defenses():
+    """Against the real lake: both K and DEF must appear. Guards two bugs the
+    synthetic tests missed -- kickers being filtered out of `weekly` at ingest,
+    and retired players keeping a trailing average forever."""
+    board = project_kdst(2024, 5)
+    assert not board.empty
+    by_pos = board["position"].value_counts()
+    assert by_pos.get("K", 0) > 0, "no kickers -- are K rows being dropped at ingest?"
+    assert by_pos.get("DEF", 0) > 0
+    # A DST can legitimately project negative (points allowed, no takeaways);
+    # kickers shouldn't. Everything should be finite and in a sane range.
+    assert board["pred"].notna().all()
+    assert board["pred"].between(-20, 40).all()
+    assert (board.loc[board["position"] == "K", "pred"] >= 0).all()
+    # Nobody long-retired: Adam Vinatieri's last season was 2019.
+    assert "Adam Vinatieri" not in set(board["player_display_name"])
 
 
 def test_project_kdst_assembles_board_rows(monkeypatch):

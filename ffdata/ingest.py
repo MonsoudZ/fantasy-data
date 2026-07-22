@@ -28,18 +28,21 @@ FIRST_SEASON = 2019
 UA = {"User-Agent": "ff-data-ingest/0.1"}
 
 # Offensive positions kept from the (all-position) weekly file.
-_OFFENSE = {"QB", "RB", "WR", "TE", "FB"}
+# Offensive skill positions, plus K -- kdst.build_kicker reads kickers out of
+# `weekly`, so dropping them here would silently kill kicker projections.
+# Team defense comes from `schedules`, not here.
+_KEEP_POSITIONS = {"QB", "RB", "WR", "TE", "FB", "K"}
 
 
 def _normalize_weekly(df: pd.DataFrame) -> pd.DataFrame:
     """Map nflverse's `stats_player_week` file onto the schema our code expects.
 
-    The new asset renamed a couple of columns and now includes every position
-    (defense, kickers). Rename them back and keep offensive players only.
+    The new asset renamed a couple of columns and now includes every position.
+    Rename them back and keep the positions we actually model (skill + kickers).
     """
     df = df.rename(columns={"team": "recent_team", "passing_interceptions": "interceptions"})
     if "position" in df.columns:
-        df = df[df["position"].isin(_OFFENSE)].reset_index(drop=True)
+        df = df[df["position"].isin(_KEEP_POSITIONS)].reset_index(drop=True)
     return df
 
 

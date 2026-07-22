@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+from conftest import requires_data_lake  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 from ffdata.web import (  # noqa: E402
@@ -118,17 +119,30 @@ def test_team_crud_via_api(tmp_path, monkeypatch):
     assert c.get("/api/teams").json()["teams"] == []
 
 
-def test_draft_accepts_custom_rules_past_validation():
+def test_draft_rejects_an_unknown_scoring_name():
+    """Validation is checked without data: a bogus scoring name is rejected
+    before the board is ever built."""
     from fastapi.testclient import TestClient
 
     from ffdata.web import app
-    c = TestClient(app)
-    # No data lake here, so it fails building the board -- but it must get PAST
-    # scoring validation (not "bad scoring") when custom rules are supplied.
-    r = c.post("/api/draft", json={"season": 2024, "teams": 10, "scoring": "custom",
-                                   "rules": {"reception": 1.0, "pass_td": 6.0},
-                                   "lineup": {"starters": {"QB": 1}, "flex": 1, "superflex": 1}}).json()
-    assert r["ok"] is False and r["error"] != "bad scoring"
+    r = TestClient(app).post("/api/draft", json={"season": 2024, "scoring": "quantum"}).json()
+    assert r["ok"] is False and r["error"] == "bad scoring"
+
+
+@requires_data_lake
+def test_draft_builds_a_board_with_custom_rules():
+    """Against the real lake: custom rules pass validation AND produce a board."""
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    r = TestClient(app).post("/api/draft", json={
+        "season": 2024, "teams": 10, "scoring": "custom",
+        "rules": {"reception": 1.0, "pass_td": 6.0},
+        "lineup": {"starters": {"QB": 1}, "flex": 1, "superflex": 1}}).json()
+    assert r["ok"] is True, r.get("error")
+    assert r["players"], "custom-scoring draft board came back empty"
+    top = r["players"][0]
+    assert {"player", "position", "proj", "vor", "auction"} <= set(top)
 
 
 def test_league_cfg_applies_imported_lineup():

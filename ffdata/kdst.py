@@ -132,6 +132,13 @@ def _trailing_pred(scored: pd.DataFrame, key: str, season: int, week: int,
     prior = s[s["_k"] < season * 100 + week].sort_values([key, "_k"])
     if prior.empty:
         return pd.DataFrame(columns=[key, "pred"])
+    # Only project entities that are still active -- their most recent game must
+    # be this season or last. Without this a long-retired kicker keeps a trailing
+    # average forever and can be recommended as a starter.
+    last_played = prior.groupby(key)["season"].max()
+    prior = prior[prior[key].isin(last_played[last_played >= season - 1].index)]
+    if prior.empty:
+        return pd.DataFrame(columns=[key, "pred"])
     pred = prior.groupby(key).tail(window).groupby(key)["fp"].mean().round(2)
     return pred.reset_index().rename(columns={"fp": "pred"})
 
@@ -153,7 +160,10 @@ def project_kdst(season: int, week: int, rules: ScoringRules = PPR, con=None,
         scored = score_kicker(kick, rules)
         pred = _trailing_pred(scored, "player_display_name", season, week, window)
         if not pred.empty:
-            team = (scored.sort_values(["season", "week"])
+            # Team as of the most recent game BEFORE (season, week) -- using the
+            # global last team would label a 2024 board with a 2025 trade.
+            prior = scored[scored["season"] * 100 + scored["week"] < season * 100 + week]
+            team = (prior.sort_values(["season", "week"])
                     .groupby("player_display_name")["recent_team"].last())
             k = pred.assign(position="K",
                             recent_team=pred["player_display_name"].map(team).fillna(""))
