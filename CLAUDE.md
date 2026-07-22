@@ -28,7 +28,7 @@ Network access required (nflverse pulls over HTTP).
 | `matchup.py` | Monte Carlo lineup win-prob; residual sampler |
 | `correlation.py` | Gaussian copula for same-game correlation |
 | `optimize.py` | lineup optimizer (h2h / tournament / stack) + weekly CLI |
-| `edge.py` | game-line edge finder (found no edge — markets efficient) |
+| `betting.py` | American-odds / de-vig math + empirical P(over), shared by props |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `draft.py` | preseason season projections, VOR, snake/auction, keepers, trades |
 | `dynasty.py` | age curves (delta method) + multi-year dynasty value |
@@ -65,7 +65,12 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - Monte Carlo intervals are **calibrated to ~1pt** out of sample; prop P(over) to
   ~2-3pt. Same-game QB↔receiver residual correlation is **+0.20**.
 - **Game betting markets are efficient** to a public-data model (no edge survives
-  the vig). Props *might* be beatable but need a real odds source (nflverse has none).
+  the vig). The game-line edge finder that established this was **pruned as a
+  dead-end**; its reusable odds math survives in `betting.py`. Props *might* be
+  beatable but need a real odds source (nflverse has none).
+- The **stacked ensemble ("colony")** was a dead-end too — stacking can't beat the
+  irreducible floor when models err ~0.97-correlated — and was **removed**. Finding
+  kept; code gone.
 - Draft: the season GBM alone loses to naive "last year's points"; the shipped
   projection is a **0.4-model / 0.6-prior blend** (rank ~0.72). Delta-method age
   curves: RB peaks ~24 (cliff), WR ~25, TE ages gracefully.

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ffdata.edge import american_to_prob, american_profit, _prob_over
+from ffdata.betting import american_to_prob, american_profit, _prob_over
 
 
 def test_american_to_prob_known_values():

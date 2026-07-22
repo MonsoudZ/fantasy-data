@@ -1,16 +1,16 @@
 """Player-props edge finder: our projections vs sportsbook prop lines.
 
-Game lines are efficient (edge.py found no edge after the vig). Player props are
-softer -- more markets, lower limits, less sharp attention -- so a competent
-per-stat projection has a real chance to beat them. This is the one place the
-projection stack might find money.
+Game betting lines proved efficient to a public-data model (no edge survived the
+vig). Player props are softer -- more markets, lower limits, less sharp attention
+-- so a competent per-stat projection has a real chance to beat them. This is the
+one place the projection stack might find money.
 
 Props are priced on *individual stats* (receiving yards, receptions, passing
 yards, ...), not fantasy points, so each market gets its own model: the same
 leak-free feature layer and empirical-residual machinery as everywhere else,
 with the target column swapped. P(over the line) is the share of the model's
-out-of-sample residuals that would clear it -- the same trick edge.py uses for
-game totals, and validated calibrated per market (see `calibrate`).
+out-of-sample residuals that would clear it (empirical-residual tail, see
+`ffdata.betting._prob_over`), and validated calibrated per market (see `calibrate`).
 
 Data note: nflverse ships no prop odds. You bring the lines (a CSV: player,
 market, line, over_odds, under_odds); this prices them. The engine and its
@@ -27,7 +27,7 @@ import pandas as pd
 import lightgbm as lgb
 
 from .features import build_features, feature_columns
-from .edge import american_to_prob, american_profit, _prob_over
+from .betting import american_to_prob, american_profit, _prob_over
 from .optimize import _norm
 
 # Prop market -> the positions that accrue that stat.

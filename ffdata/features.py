@@ -71,7 +71,7 @@ NGS_COLS = [
 # -0.004, rank +0.0005 -- all within noise). Even genuinely orthogonal signals
 # (pressure, drops, broken tackles, wind) don't lower the floor: the predictable
 # part is already captured by usage/efficiency, and the residual is outcome
-# variance. Fourth confirmation of the irreducible floor (after neural, colony,
+# variance. Fourth confirmation of the irreducible floor (after neural, stacking,
 # NGS). Kept as opt-in infrastructure.
 PFR_COLS = [
     "pfr_bad_throw_pct", "pfr_pressured_pct", "pfr_sacked",       # QB protection

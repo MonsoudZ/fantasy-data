@@ -1,7 +1,7 @@
 """Neural ant: a sequence model that reads a player's trajectory.
 
-The colony (ensemble.py) stalled because its ants were all snapshot models --
-they see the same trailing averages and err together. This ant is different by
+An earlier stacked ensemble stalled because its models were all snapshot models
+-- they see the same trailing averages and err together. This one is different by
 construction: a GRU consumes a player's last K games as an ordered *sequence*
 of raw per-game outcomes, so it can learn momentum, ramps, and breakout curves
 that fixed r3/r5 windows blur. A learned position embedding lets QB/RB/WR/TE
@@ -26,9 +26,9 @@ three seasons. A better, fundamentally different model still makes the same
 mistakes: the residual is irreducible game-to-game fantasy variance, and it is
 architecture-invariant. Consequences: (1) the sequence ant is the strongest
 single projector built here and a good candidate to promote to primary;
-(2) stacking is settled -- it cannot help when the error floor is noise (see
-ensemble.py). The only remaining lever is new *information* (next-gen stats,
-depth charts, weather), not a better model.
+(2) stacking is settled -- it cannot help when the error floor is noise (a
+stacked ensemble was tried and confirmed this). The only remaining lever is new
+*information* (next-gen stats, depth charts, weather), not a better model.
 
 OpenMP note: LightGBM and PyTorch each bundle their own OpenMP runtime, and on
 macOS the second to initialize aborts the process. torch is therefore imported

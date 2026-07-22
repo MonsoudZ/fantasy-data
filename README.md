@@ -3,7 +3,7 @@
 [![CI](https://github.com/MonsoudZ/fantasy-data/actions/workflows/ci.yml/badge.svg)](https://github.com/MonsoudZ/fantasy-data/actions/workflows/ci.yml)
 
 Fantasy football data lake + platform-agnostic scoring. Foundation for
-projections, lineup optimization, and edge-finding vs Vegas lines.
+projections, lineup optimization, draft/dynasty value, and player-prop edges.
 
 ## Design
 
@@ -29,7 +29,7 @@ pip install -e ".[neural]"   # the GRU projector (PyTorch)
 pip install -e ".[web]"      # the FastAPI web UI
 ```
 
-The projection and edge models use LightGBM, which needs an OpenMP runtime:
+The projection models use LightGBM, which needs an OpenMP runtime:
 
 ```bash
 brew install libomp          # macOS
@@ -206,11 +206,12 @@ calibration are what this provides.
    (`ffdata/matchup.py` — resamples out-of-sample residuals; predictive
    intervals calibrated to ~1pt out-of-sample on 2024)
 5. ~~Edge finder: model probability vs implied odds, tracked over time~~
-   (`ffdata/edge.py` — walk-forward game models vs de-vigged lines, with a
+   (a game-line edge finder — walk-forward game models vs de-vigged lines, with a
    bet-the-edge backtest. Honest finding: a fundamentals-only model from public
    nflverse data lands ~0.6-1.1 pts MAE short of the closing line, so no edge
    survives the vig on 2023-24 game markets — spread/total ROI ≈ break-even,
-   moneyline negative. The harness is built to test a *better* signal next.)
+   moneyline negative. **The finder was pruned as a dead-end**; its reusable odds
+   math lives on in `ffdata/betting.py`, which powers the prop edges below.)
 6. ~~Neural projector + win-probability lineup optimizer~~
    (`ffdata/neural.py` — a GRU over player trajectories, the most accurate
    single model (beats LightGBM on MAE/RMSE/rank across 2023-25); promoted to
@@ -231,9 +232,9 @@ calibration are what this provides.
    odds; nflverse has none.)
 
 **What we learned:** across six independent tests — a neural model, a stacked
-ensemble, and every rich data source (Next Gen Stats, PFR advanced, play-by-play
-red-zone, opponent matchup) — the weekly point-projection error floor (~±6 RMSE)
-did not move. It's dominated by irreducible game-day variance; the predictable
+ensemble (since pruned), and every rich data source (Next Gen Stats, PFR advanced,
+play-by-play red-zone, opponent matchup) — the weekly point-projection error floor
+(~±6 RMSE) did not move. It's dominated by irreducible game-day variance; the predictable
 signal is already captured by usage, efficiency, and the Vegas line. The payoff
 therefore shifts from *predicting* better to *deciding* better under calibrated
 uncertainty (steps 4 and 6). Those experiments live behind opt-in flags in
