@@ -101,6 +101,34 @@ def test_league_crud_via_api(tmp_path, monkeypatch):
     assert c.get("/api/leagues").json()["leagues"] == []
 
 
+def test_league_carries_full_settings_and_caps_at_three(tmp_path, monkeypatch):
+    monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))
+    from fastapi.testclient import TestClient
+
+    from ffdata.web import app
+    c = TestClient(app)
+
+    # The hub's full league: roster, opponents, and format all roundtrip.
+    full = c.post("/api/leagues", json={
+        "name": "Dynasty", "season": 2025, "teams": 12,
+        "lineup": {"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1},
+                   "flex": 1, "wrte": 1, "superflex": 1},
+        "roster": {"QB": ["Josh Allen"], "RB": ["Bijan Robinson"]},
+        "opponents": [{"name": "rival", "players": ["Ja'Marr Chase"]}],
+        "fmt": {"type": "dynasty", "draft": "auction", "slot": 3, "budget": 300}}).json()
+    assert full["ok"]
+    lg = full["league"]
+    assert lg["roster"]["QB"] == ["Josh Allen"] and lg["lineup"]["wrte"] == 1
+    assert lg["opponents"][0]["players"] == ["Ja'Marr Chase"]
+    assert lg["fmt"]["type"] == "dynasty" and lg["fmt"]["budget"] == 300
+
+    # Up to three leagues; the fourth is refused with a clear message.
+    for n in ("B", "C"):
+        assert c.post("/api/leagues", json={"name": n, "season": 2025}).json()["ok"]
+    r = c.post("/api/leagues", json={"name": "D", "season": 2025}).json()
+    assert r["ok"] is False and "up to 3" in r["error"]
+
+
 def test_team_crud_via_api(tmp_path, monkeypatch):
     # Teams live in teams.json beside the leagues file the state var points at.
     monkeypatch.setenv("FFDATA_STATE", str(tmp_path / "leagues.json"))

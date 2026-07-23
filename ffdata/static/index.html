@@ -112,6 +112,15 @@
     border-radius:12px; padding:16px; font-size:14px; }
   .empty { text-align:center; color:var(--muted); padding:60px 20px; }
   .empty .big { font-size:40px; margin-bottom:8px; }
+  /* My Leagues hub */
+  .lg-card { display:flex; justify-content:space-between; align-items:center; gap:10px;
+    background:var(--card2); border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px; }
+  .lg-card.on { border-color:var(--good); box-shadow:0 0 0 1px var(--good) inset; }
+  .lg-btns { display:flex; gap:6px; flex-shrink:0; }
+  .lg-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(70px,1fr)); gap:6px; margin-top:4px; }
+  .lg-f { display:flex; flex-direction:column; gap:2px; font-size:11px; color:var(--muted);
+    text-transform:none; letter-spacing:0; margin:0; }
+  .lg-f input { padding:6px 7px; font-size:13px; }
   .advice-wrap { margin-top:12px; }
   .advice-btn { padding:9px 16px; font-size:13px; }
   .advice-mount:empty { display:none; }
@@ -165,11 +174,18 @@
     <h1>ff-data</h1>
     <p>Your fantasy command center — lineups, drafts, and prop edges from one model.</p>
     <div class="tabs">
+      <button class="tab" data-tab="leagues">My Leagues</button>
       <button class="tab on" data-tab="lineup">Lineup</button>
       <button class="tab" data-tab="draft">Draft board</button>
       <button class="tab" data-tab="props">Betting</button>
     </div>
   </header>
+
+  <div id="active-banner" style="display:none;text-align:center;margin:10px auto 0;max-width:1080px;padding:0 18px">
+    <span class="chip" style="background:linear-gradient(90deg,var(--accent),var(--accent2));color:#fff;border-color:transparent">
+      <b style="color:#fff">Active league</b> <span id="active-name"></span>
+      <span class="x" id="active-clear" title="use no league">✕</span></span>
+  </div>
 
   <div class="wrap">
     <!-- ============ LINEUP ============ -->
@@ -301,6 +317,32 @@
       </div>
     </div>
 
+    <!-- ============ MY LEAGUES ============ -->
+    <div class="panel" id="p-leagues">
+      <div class="grid">
+        <div class="card">
+          <label style="margin-top:0">My leagues <span style="text-transform:none;color:var(--muted)">(up to 3)</span></label>
+          <div id="lg-cards"></div>
+          <button type="button" id="lg-new" class="chip-btn" style="float:none;margin-top:8px">+ New league</button>
+
+          <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+            <label style="margin-top:0">Import from Sleeper</label>
+            <div class="row">
+              <input type="text" id="lh-sleeper-user" placeholder="Sleeper username" style="flex:1" />
+              <button type="button" id="lh-sleeper-find" class="draftbtn">Find</button>
+            </div>
+            <select id="lh-sleeper-leagues" style="display:none;margin-top:8px"></select>
+            <div class="hint" id="lh-sleeper-hint">Pulls scoring, roster slots, your roster, the other managers &amp; the draft.</div>
+          </div>
+        </div>
+
+        <div class="card" id="lg-editor">
+          <div class="empty"><div class="big">🏟️</div>Pick a league to edit, or add one.
+            <div class="hint" style="margin-top:8px">Its settings drive every tab — lineup, draft, props.</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ BETTING ============ -->
     <div class="panel" id="p-props">
       <div class="seg" id="b-mode" style="max-width:340px;margin:0 auto 18px">
@@ -353,6 +395,7 @@ function seg(id, cb){ document.querySelectorAll(`#${id} button`).forEach(b=>b.on
   document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.remove("on")); b.classList.add("on"); cb&&cb(b.dataset.v); }); }
 
 const CFG = { advice:false };
+let ACTIVE = null;   // the active league (My Leagues hub); drives every tab when set
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 // Model output is our own, but escape it anyway, then render blank-line paragraphs
 // and simple "- " bullets. No raw HTML from the response ever reaches the DOM.
@@ -421,6 +464,9 @@ const L = { scoring:"ppr", rules:null, mode:"h2h", full:false, superflex:false,
 // kicker, and a QB-eligible SUPERFLEX slot when the toggle is on. Slots with no
 // rostered player just stay empty, so this is safe for offense-only rosters too.
 function lineupCfg(){
+  // An active league's exact starting slots win (incl. the two-position flexes);
+  // otherwise the standard lineup plus the manual superflex toggle.
+  if(ACTIVE && ACTIVE.lineup && ACTIVE.lineup.starters) return ACTIVE.lineup;
   return { starters:{QB:1,RB:2,WR:3,TE:1,DEF:1,K:1}, flex:1, superflex:L.superflex?1:0 };
 }
 seg("l-scoring", v=>{ L.scoring=v; L.rules=null; PLAYERS=null; });
@@ -607,7 +653,7 @@ $("#l-fa-go").onclick=async()=>{
   const btn=$("#l-fa-go"); btn.disabled=true; btn.textContent="Finding…";
   $("#l-out").innerHTML=`<div class="spinner"><div class="ring"></div>Projecting the slate & ranking free agents…<br><span class="hint">First run trains the model (~2 min).</span></div>`;
   const body={ season:+$("#l-season").value, week:+$("#l-week").value, scoring:L.scoring, rules:L.rules,
-    projector:$("#l-proj").value, roster, exclude:PK["l-taken"].names().join("\n"), lineup:lineupCfg(), n:15 };
+    projector:$("#l-proj").value, roster, exclude:[...PK["l-taken"].names(), ...activeExclude()].join("\n"), lineup:lineupCfg(), n:15 };
   try{ const d=await (await fetch("/api/freeagents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); renderFreeAgents(d); }
   catch(e){ $("#l-out").innerHTML=`<div class="err">Request failed: ${e}</div>`; }
   btn.disabled=false; btn.textContent="Find waiver upgrades";
@@ -766,6 +812,7 @@ async function refreshLeagues(select){
   $("#d-league").innerHTML = `<option value="">— new / unsaved —</option>` +
     LEAGUES.map(l=>`<option value="${l.name.replace(/"/g,'&quot;')}">${l.name} · ${l.scoring.toUpperCase()} · ${l.teams}tm · '${String(l.season).slice(2)}</option>`).join("");
   if(cur) $("#d-league").value = cur;
+  if(typeof renderLeagueCards==="function") renderLeagueCards();
 }
 $("#d-league").onchange=()=>{
   const l = LEAGUES.find(x=>x.name===$("#d-league").value); if(!l) return;
@@ -1002,6 +1049,230 @@ function renderGames(d){
     <div class="scroll">${d.games.map(card).join("")}</div>
     <div class="note">Game markets are efficient — this is a sanity check on the line, not a profitable edge.</div>`;
 }
+
+/* ============ MY LEAGUES HUB ============ */
+/* One league object holds scoring, lineup slots, format, your roster and the
+   other managers; selecting it drives lineup / draft / props from a single place. */
+const PPR_DEF = {pass_yd:0.04,pass_td:4,interception:-2,rush_yd:0.1,rush_td:6,
+  reception:1,rec_yd:0.1,rec_td:6,te_reception_bonus:0,fumble_lost:-2,two_pt:2,
+  special_teams_td:6,fg_0_39:3,fg_40_49:4,fg_50_plus:5,pat:1,fg_miss:0,dst_sack:1,
+  dst_int:2,dst_fumble_rec:2,dst_td:6,dst_safety:2,dst_block:2,
+  bonus_rush_100:0,bonus_rec_100:0,bonus_pass_300:0};
+const SCORE_GROUPS = [
+  ["Passing", [["pass_yd","yd"],["pass_td","TD"],["interception","INT"],["bonus_pass_300","300yd"]]],
+  ["Rushing", [["rush_yd","yd"],["rush_td","TD"],["bonus_rush_100","100yd"]]],
+  ["Receiving", [["reception","rec"],["rec_yd","yd"],["rec_td","TD"],["te_reception_bonus","TE+"],["bonus_rec_100","100yd"]]],
+  ["Misc", [["fumble_lost","fumble"],["two_pt","2pt"],["special_teams_td","ST TD"]]],
+  ["Kicker", [["fg_0_39","FG0-39"],["fg_40_49","FG40-49"],["fg_50_plus","FG50+"],["pat","PAT"],["fg_miss","miss"]]],
+  ["Defense", [["dst_sack","sack"],["dst_int","INT"],["dst_fumble_rec","fum"],["dst_td","TD"],["dst_safety","safe"],["dst_block","blk"]]],
+];
+const SLOT_ROWS = [["QB","QB"],["RB","RB"],["WR","WR"],["TE","TE"],["DEF","DEF"],["K","K"],
+  ["flex","FLEX"],["wrte","W/T"],["rbwr","R/W"],["superflex","SFLX"],["bench","Bench"]];
+
+let HUBSEL = null;           // name of the league being edited (null = new)
+const HUBP = {};             // roster pickers by position
+
+function blankLeague(){
+  return { name:"", teams:12, scoring:"ppr", rules:null,
+    lineup:{starters:{QB:1,RB:2,WR:2,TE:1,K:1,DEF:1}, flex:1, superflex:0, wrte:0, rbwr:0, bench:6},
+    roster:{QB:[],RB:[],WR:[],TE:[],K:[],DEF:[]}, opponents:[],
+    fmt:{type:"redraft", draft:"snake", slot:1, budget:200} };
+}
+
+function renderLeagueCards(){
+  const box = $("#lg-cards"); if(!box) return;
+  if(!LEAGUES.length){ box.innerHTML = `<div class="hint">No leagues yet — add one or import from Sleeper.</div>`; }
+  else box.innerHTML = LEAGUES.map(l => {
+    const on = ACTIVE && ACTIVE.name===l.name;
+    const type = (l.fmt&&l.fmt.type)||"redraft";
+    return `<div class="lg-card${on?' on':''}" data-n="${esc(l.name)}">
+      <div><b>${esc(l.name)}</b> ${on?'<span class="lab" style="color:var(--good)">ACTIVE</span>':''}
+        <div class="hint">${(l.scoring||'ppr').toUpperCase()} · ${l.teams}tm · ${type}</div></div>
+      <div class="lg-btns">
+        <button class="chip-btn" data-act="use" data-n="${esc(l.name)}">${on?'Active':'Use'}</button>
+        <button class="chip-btn" data-act="edit" data-n="${esc(l.name)}">Edit</button>
+      </div></div>`; }).join("");
+  box.querySelectorAll("[data-act]").forEach(b => b.onclick = () => {
+    const lg = LEAGUES.find(x=>x.name===b.dataset.n);
+    if(b.dataset.act==="use"){ if(lg) activateLeague(lg); }
+    else editLeague(b.dataset.n);
+  });
+  $("#lg-new").disabled = LEAGUES.length >= 3;
+}
+
+function editLeague(name){
+  const lg = name ? LEAGUES.find(l=>l.name===name) : null;
+  HUBSEL = lg ? lg.name : null;
+  const L0 = lg ? JSON.parse(JSON.stringify(lg)) : blankLeague();
+  const st = (L0.lineup&&L0.lineup.starters)||{}, li = L0.lineup||{}, fm = L0.fmt||{};
+  const custom = L0.scoring==="custom";
+  const seg3 = (id,val,opts) => `<div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${o[0]===val?'on':''}">${o[1]}</button>`).join("")}</div>`;
+  const num = (id,v,extra="") => `<input type="number" id="${id}" value="${v}" step="any" ${extra} style="padding:7px 8px" />`;
+  const scoreGrid = SCORE_GROUPS.map(([g,fields]) => `<div style="margin-top:6px"><div class="hint" style="margin:0">${g}</div>
+    <div class="lg-grid">${fields.map(([k,lab])=>`<label class="lg-f">${lab}${num("sc-"+k, (L0.rules&&L0.rules[k]!=null)?L0.rules[k]:PPR_DEF[k])}</label>`).join("")}</div></div>`).join("");
+  const slotGrid = SLOT_ROWS.map(([k,lab]) => {
+    const v = (k in st) ? st[k] : (li[k]||0);
+    return `<label class="lg-f">${lab}${num("sl-"+k, v, 'min="0" max="6"')}</label>`; }).join("");
+
+  $("#lg-editor").innerHTML = `
+    <label style="margin-top:0">League name</label>
+    <input type="text" id="lg-name" value="${esc(L0.name)}" placeholder="e.g. Home 12" />
+    <div class="row" style="margin-top:8px">
+      <div style="flex:1"><label>Teams</label>${num("lg-teams", L0.teams, 'min="2" max="32"')}</div>
+      <div style="flex:1"><label>Your draft slot</label>${num("lg-slot", fm.slot||1, 'min="1"')}</div>
+    </div>
+    <label>Format</label>
+    ${seg3("lg-type", fm.type||"redraft", [["redraft","Redraft"],["keeper","Keeper"],["dynasty","Dynasty"]])}
+    <div class="row" style="margin-top:8px">
+      <div style="flex:1">${seg3("lg-draft", fm.draft||"snake", [["snake","Snake"],["auction","Auction"]])}</div>
+      <div style="flex:1"><label style="margin:0">Auction $</label>${num("lg-budget", fm.budget||200, 'min="0"')}</div>
+    </div>
+
+    <label>Scoring</label>
+    ${seg3("lg-scoring", L0.scoring, [["ppr","PPR"],["half","Half"],["standard","Std"],["custom","Custom"]])}
+    <div id="lg-custom" style="display:${custom?'block':'none'}">${scoreGrid}</div>
+
+    <label>Starting lineup</label>
+    <div class="lg-grid">${slotGrid}</div>
+    <div class="hint">Counts per slot. FLEX = RB/WR/TE, W/T = WR/TE, R/W = RB/WR, SFLX = superflex (QB-eligible).</div>
+
+    <label>Your roster</label>
+    <div id="lg-roster"></div>
+
+    <label>Rostered by other managers <span style="text-transform:none;color:var(--muted)">(waiver exclusion)</span></label>
+    <div id="lg-opp"></div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="go" id="lg-save" style="flex:2">Save league</button>
+      <button class="draftbtn" id="lg-activate" style="flex:1">Use</button>
+      ${lg?'<button class="draftbtn" id="lg-delete">Delete</button>':''}
+    </div>
+    <div class="hint" id="lg-msg"></div>`;
+
+  seg("lg-type"); seg("lg-draft"); seg("lg-scoring", v => {
+    $("#lg-custom").style.display = v==="custom" ? "block" : "none"; });
+
+  // Roster: one picker per position, prefilled. Opponents: one flat exclusion picker.
+  ["QB","RB","WR","TE","K","DEF"].forEach(pos => {
+    const host = document.createElement("div"); host.id = "lgr-"+pos; host.style.marginBottom = "6px";
+    $("#lg-roster").appendChild(host);
+    const p = picker("lgr-"+pos, {source: draftSource, pos:[pos], placeholder:"+ add "+pos, empty:"—"});
+    p.set((L0.roster&&L0.roster[pos]||[]).map(n=>({name:n, position:pos})));
+    HUBP[pos] = p;
+  });
+  const oppNames = (L0.opponents||[]).flatMap(o => o.players||[]);
+  HUBP.opp = picker("lg-opp", {source: draftSource, placeholder:"+ add a rostered player", empty:"none"});
+  HUBP.opp.set(oppNames.map(n=>({name:n, position:""})));
+
+  $("#lg-save").onclick = saveHubLeague;
+  $("#lg-activate").onclick = () => { const lg2 = readEditor(); if(lg2) activateLeague(lg2); };
+  if(lg) $("#lg-delete").onclick = deleteHubLeague;
+}
+
+function readEditor(){
+  const name = $("#lg-name").value.trim();
+  if(!name){ $("#lg-name").focus(); return null; }
+  const scoring = document.querySelector("#lg-scoring button.on").dataset.v;
+  let rules = null;
+  if(scoring==="custom"){ rules = {}; SCORE_GROUPS.forEach(([g,fs]) => fs.forEach(([k]) =>
+    rules[k] = parseFloat($("#sc-"+k).value)||0)); }
+  const iv = id => parseInt($("#"+id).value,10)||0;
+  const starters = {}; ["QB","RB","WR","TE","DEF","K"].forEach(p => starters[p]=iv("sl-"+p));
+  const lineup = { starters, flex:iv("sl-flex"), wrte:iv("sl-wrte"), rbwr:iv("sl-rbwr"),
+    superflex:iv("sl-superflex"), bench:iv("sl-bench") };
+  const roster = {}; ["QB","RB","WR","TE","K","DEF"].forEach(p => roster[p]=HUBP[p].names());
+  const opp = HUBP.opp.names();
+  const fmt = { type:document.querySelector("#lg-type button.on").dataset.v,
+    draft:document.querySelector("#lg-draft button.on").dataset.v,
+    slot:iv("lg-slot"), budget:iv("lg-budget") };
+  return { name, season:CFG.season||+$("#d-season").value||2025, teams:iv("lg-teams")||12,
+    scoring, rules, lineup, roster,
+    opponents: opp.length ? [{name:"Other rosters", players:opp}] : [], fmt };
+}
+
+async function saveHubLeague(){
+  const lg = readEditor(); if(!lg) return;
+  const keepers = HUBSEL ? (LEAGUES.find(l=>l.name===HUBSEL)||{}).keepers||[] : [];
+  const drafted = HUBSEL ? (LEAGUES.find(l=>l.name===HUBSEL)||{}).drafted||[] : [];
+  const body = {...lg, keepers, drafted};
+  const r = await (await fetch("/api/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+  if(!r.ok){ $("#lg-msg").innerHTML = `<span class="warn" style="display:inline-block">${esc(r.error||"could not save")}</span>`; return; }
+  await refreshLeagues();
+  if(ACTIVE && ACTIVE.name===lg.name) activateLeague(LEAGUES.find(l=>l.name===lg.name));
+  editLeague(lg.name);
+  $("#lg-msg").textContent = "Saved.";
+}
+
+async function deleteHubLeague(){
+  if(!HUBSEL || !confirm(`Delete “${HUBSEL}”?`)) return;
+  await fetch("/api/leagues/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:HUBSEL})});
+  if(ACTIVE && ACTIVE.name===HUBSEL) clearActive();
+  await refreshLeagues();
+  $("#lg-editor").innerHTML = `<div class="empty"><div class="big">🏟️</div>Pick a league to edit, or add one.</div>`;
+}
+
+function activeExclude(){
+  return ACTIVE ? (ACTIVE.opponents||[]).flatMap(o => o.players||[]) : [];
+}
+
+function activateLeague(lg){
+  ACTIVE = lg;
+  $("#active-banner").style.display = "block";
+  $("#active-name").textContent = `${lg.name} · ${(lg.scoring||'ppr').toUpperCase()} · ${lg.teams}tm`;
+  // Drive the DRAFT tab.
+  D.scoring = lg.scoring; D.rules = lg.rules||null; D.lineup = lg.lineup||null;
+  D.drafted = new Set((lg.drafted||[]).map(norm)); D._names = {};
+  (lg.drafted||[]).forEach(n => D._names[norm(n)] = n);
+  D.mode = (lg.fmt&&lg.fmt.type==="dynasty") ? "dynasty" : "redraft";
+  const dt = $("#d-teams"); if(dt) dt.value = lg.teams;
+  document.querySelectorAll("#d-scoring button").forEach(b => b.classList.toggle("on", b.dataset.v===lg.scoring));
+  document.querySelectorAll("#d-mode button").forEach(b => b.classList.toggle("on", b.dataset.v===D.mode));
+  if(typeof renderDrafted==="function") renderDrafted();
+  if(D.board && D.board.length && typeof loadDraft==="function") loadDraft();
+  // Drive the LINEUP tab.
+  L.scoring = lg.scoring; L.rules = lg.rules||null;
+  L.superflex = !!(lg.lineup && lg.lineup.superflex);
+  L.roster = {QB:[],RB:[],WR:[],TE:[],DEF:[],K:[]};
+  ROSTER_POS.forEach(p => { if(lg.roster && Array.isArray(lg.roster[p])) L.roster[p] = lg.roster[p].slice(); });
+  document.querySelectorAll("#l-scoring button").forEach(b => b.classList.toggle("on", b.dataset.v===lg.scoring));
+  PLAYERS = null; if(typeof renderRoster==="function") renderRoster();
+  renderLeagueCards();
+}
+
+function clearActive(){
+  ACTIVE = null;
+  $("#active-banner").style.display = "none";
+  renderLeagueCards();
+}
+$("#active-clear").onclick = clearActive;
+$("#lg-new").onclick = () => { if(LEAGUES.length<3) editLeague(null); };
+
+/* Sleeper import into the hub. */
+$("#lh-sleeper-find").onclick = async () => {
+  const username = $("#lh-sleeper-user").value.trim(); if(!username){ $("#lh-sleeper-user").focus(); return; }
+  const btn = $("#lh-sleeper-find"), sel = $("#lh-sleeper-leagues"); btn.disabled = true; btn.textContent = "…";
+  $("#lh-sleeper-hint").textContent = "Looking up your leagues…";
+  try{
+    const d = await (await fetch("/api/import/sleeper/leagues",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username, season:CFG.season||2025})})).json();
+    if(!d.ok){ $("#lh-sleeper-hint").textContent = d.error||"lookup failed"; sel.style.display="none"; }
+    else{ sel.innerHTML = `<option value="">— pick a league —</option>`+d.leagues.map(l=>`<option value="${l.league_id}">${esc(l.name)} · ${l.scoring.toUpperCase()} · ${l.teams}tm</option>`).join("");
+      sel.style.display = "block"; $("#lh-sleeper-hint").textContent = `${d.leagues.length} league(s).`; }
+  }catch(e){ $("#lh-sleeper-hint").textContent = "Sleeper request failed."; }
+  btn.disabled = false; btn.textContent = "Find";
+};
+$("#lh-sleeper-leagues").onchange = async () => {
+  const league_id = $("#lh-sleeper-leagues").value; if(!league_id) return;
+  if(LEAGUES.length>=3 && !LEAGUES.some(l=>false)){ $("#lh-sleeper-hint").textContent = "You already have 3 leagues — delete one first."; return; }
+  $("#lh-sleeper-hint").textContent = "Importing…";
+  try{
+    const d = await (await fetch("/api/import/sleeper/league",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({league_id, username:$("#lh-sleeper-user").value.trim(), season:CFG.season||2025})})).json();
+    if(!d.ok){ $("#lh-sleeper-hint").textContent = d.error||"import failed"; return; }
+    await refreshLeagues();
+    $("#lh-sleeper-hint").textContent = `Imported “${d.league}”. Edit it below, then Use it.`;
+    editLeague(d.league);
+  }catch(e){ $("#lh-sleeper-hint").textContent = "Import request failed."; }
+};
+
 </script>
 </body>
 </html>
