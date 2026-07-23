@@ -295,3 +295,60 @@ def test_jitter_is_deterministic_and_bounded():
     assert a == _jitter("Christian McCaffrey", 3, 24.0)      # stable
     assert abs(a) <= 24.0
     assert _jitter("Christian McCaffrey", 3, 24.0) != _jitter("Christian McCaffrey", 4, 24.0)
+
+
+def test_bench_points_break_a_tied_matchup():
+    """League rule: starters decide the game, but a tie on starter points goes to
+    whoever's BENCH scored more. Only if the benches also tie is it a real draw."""
+    import numpy as np
+
+    from ffdata.season_sim import _beats, standings_with_bench
+    # One week, teams 0 and 1 tie on starters (100 each); team 0 has the better bench.
+    scores = np.array([[100.0], [100.0]])
+    bench = np.array([[30.0], [12.0]])
+    assert _beats(scores, bench, 0, 1, 0) is True     # bench breaks the tie
+    assert _beats(scores, bench, 1, 0, 0) is False
+
+    table = standings_with_bench(scores, bench, [[(0, 1)]])
+    winner = max(table, key=lambda r: r["wins"])
+    assert winner["team"] == 0 and winner["wins"] == 1.0
+
+
+def test_a_true_tie_is_only_when_bench_also_ties():
+    import numpy as np
+
+    from ffdata.season_sim import _beats, standings_with_bench
+    scores = np.array([[100.0], [100.0]])
+    bench = np.array([[20.0], [20.0]])                 # dead even on both
+    assert _beats(scores, bench, 0, 1, 0) is False and _beats(scores, bench, 1, 0, 0) is False
+    table = standings_with_bench(scores, bench, [[(0, 1)]])
+    assert all(r["wins"] == 0.5 for r in table)        # half a win each
+
+
+def test_bench_never_counts_toward_points_for():
+    """Bench is a tiebreaker only -- it must never inflate a team's season total."""
+    import numpy as np
+
+    from ffdata.season_sim import standings_with_bench
+    scores = np.array([[80.0, 90.0], [70.0, 100.0]])
+    bench = np.array([[50.0, 50.0], [1.0, 1.0]])       # team 0 has a huge bench
+    table = standings_with_bench(scores, bench, [[(0, 1)], [(0, 1)]])
+    pf = {r["team"]: r["pf"] for r in table}
+    assert pf[0] == 170.0 and pf[1] == 170.0           # starters only, bench ignored
+
+
+def test_playoff_tie_broken_by_bench_then_seed():
+    import numpy as np
+
+    from ffdata.season_sim import playoff_bracket
+    seeds = [0, 1, 2, 3, 4, 5]
+    scores = np.zeros((6, 3))
+    bench = np.zeros((6, 3))
+    # Everyone ties on starters every round. Bench decides where it differs;
+    # where bench also ties, the better seed advances.
+    scores[:, :] = 50.0
+    bench[3, 0] = 5.0                     # seed 4 (team 3) out-benches seed 5 (team 4) in QF
+    champ, log = playoff_bracket(seeds, scores, [0, 1, 2], bench)
+    qf = {(g[1], g[2]): g[3] for g in log if g[0] == 0}
+    assert qf[(3, 4)] == 3, "bench point advances team 3 in the 4v5 game"
+    assert champ == 0, "all else equal, the 1 seed wins on seed"

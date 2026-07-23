@@ -43,7 +43,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .backtest_draft import _naive_board, round_robin, run_snake_draft, standings
+from .backtest_draft import _naive_board, round_robin, run_snake_draft
 from .db import connect
 from .kdst import build_dst, build_kicker, project_kdst, score_dst, score_kicker
 from .optimize import _ELIGIBLE, _norm
@@ -72,7 +72,43 @@ WAIVER_MIN_GAIN = 3.0
 WAIVER_POOL_PER_POS = 6
 
 
-def playoff_bracket(seeds: list[int], scores, weeks: list[int]) -> tuple[int, list]:
+def _beats(scores, bench, a, b, week) -> bool:
+    """Does team `a` beat team `b` in `week`? Starters decide the game; a starter
+    tie is broken by BENCH points (the user's league rule). `bench=None` skips the
+    tiebreak (bench points unknown)."""
+    if scores[a, week] != scores[b, week]:
+        return bool(scores[a, week] > scores[b, week])
+    if bench is not None and bench[a, week] != bench[b, week]:
+        return bool(bench[a, week] > bench[b, week])
+    return False        # genuinely tied on both -- caller decides (seed / half-win)
+
+
+def standings_with_bench(scores, bench, sched) -> list[dict]:
+    """Head-to-head W/L, but a tied starter score is broken by BENCH points.
+
+    Only when the benches ALSO tie is a matchup a true draw (half a win each).
+    Table is ordered by wins, then points-for (starters only -- bench never counts
+    toward the season total, just toward breaking a single matchup).
+    """
+    n = scores.shape[0]
+    wins = np.zeros(n)
+    pf = scores[:, :len(sched)].sum(axis=1)
+    for w, pairs in enumerate(sched):
+        for a, b in pairs:
+            if _beats(scores, bench, a, b, w):
+                wins[a] += 1
+            elif _beats(scores, bench, b, a, w):
+                wins[b] += 1
+            else:                       # tied on starters AND bench
+                wins[a] += 0.5
+                wins[b] += 0.5
+    table = [{"team": t, "wins": float(wins[t]), "pf": float(pf[t])} for t in range(n)]
+    table.sort(key=lambda r: (r["wins"], r["pf"]), reverse=True)
+    return table
+
+
+def playoff_bracket(seeds: list[int], scores, weeks: list[int],
+                    bench=None) -> tuple[int, list]:
     """Standard 6-team bracket: the top two seeds get a first-round bye.
 
     `backtest_draft.playoffs` pairs the whole field every round, so a six-team
@@ -86,13 +122,15 @@ def playoff_bracket(seeds: list[int], scores, weeks: list[int]) -> tuple[int, li
         wk 16  semifinals      1 v lowest, 2 v other
         wk 17  final
 
-    Returns (champion, [(week, higher, lower, winner), ...]).
+    A tied starter score is broken by BENCH points, then (if still level) by the
+    better seed. Returns (champion, [(week, higher, lower, winner), ...]).
     """
     log = []
 
     def game(week, a, b):
         hi, lo = (a, b) if seeds.index(a) < seeds.index(b) else (b, a)
-        win = hi if scores[hi, week] >= scores[lo, week] else lo   # tie -> better seed
+        # Starters, then bench, then the better seed advances.
+        win = hi if not _beats(scores, bench, lo, hi, week) else lo
         log.append((week, hi, lo, win))
         return win
 
@@ -390,7 +428,8 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
     weeks = list(REG_WEEKS) + list(PLAYOFF_WEEKS)
-    scores = np.zeros((n_teams, len(weeks)))
+    scores = np.zeros((n_teams, len(weeks)))       # STARTER points -- decide the game
+    bench = np.zeros((n_teams, len(weeks)))        # BENCH points -- tiebreak only
     taken = {_norm(p["player"]) for r in rosters for p in r}
     txns: list[list[dict]] = [[] for _ in range(n_teams)]
     lineups: list[list[dict]] = [[] for _ in range(n_teams)]
@@ -412,6 +451,7 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
             log(f"  week {w}: no results in the lake, stopping here")
             weeks = weeks[:wi]
             scores = scores[:, :wi]
+            bench = bench[:, :wi]
             break
         proj, _ = project(w)
         actual_w = by_week[w]
@@ -422,9 +462,16 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
         for t in range(n_teams):
             starters = start_by_projection(rosters[t], proj, STARTERS)
             scores[t, wi] = week_score(starters, actual_w)
+            # Bench = everyone rostered but not started. Only ever used to break a
+            # tie in a head-to-head matchup (the user's league rule); it never
+            # counts toward a team's score otherwise.
+            started = {_norm(p["player"]) for p in starters}
+            bench[t, wi] = round(sum(actual_w.get(_norm(p["player"]), 0.0)
+                                     for p in rosters[t]
+                                     if _norm(p["player"]) not in started), 2)
             if detail or t == our_slot:
                 rec = _lineup_record(rosters[t], proj, actual_w)
-                rec.update(week=w, points=scores[t, wi])
+                rec.update(week=w, points=scores[t, wi], bench_points=bench[t, wi])
                 lineups[t].append(rec)
 
         # Waivers run AFTER the week is scored, on NEXT week's projection -- the
@@ -464,11 +511,11 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
         log(f"  week {w}: we scored {scores[our_slot, wi]:.1f}")
 
     sched = round_robin(n_teams, len(REG_WEEKS))
-    reg = scores[:, :len(REG_WEEKS)]
-    table = standings(reg, sched)
+    reg_w = len(REG_WEEKS)
+    table = standings_with_bench(scores[:, :reg_w], bench[:, :reg_w], sched)
     seeds = [row["team"] for row in table][:6]
     pw = [weeks.index(w) for w in PLAYOFF_WEEKS if w in weeks]
-    champ, bracket = (playoff_bracket(seeds, scores, pw) if len(pw) == 3
+    champ, bracket = (playoff_bracket(seeds, scores, pw, bench) if len(pw) == 3
                       else (seeds[0], []))
     place = next((i + 1 for i, row in enumerate(table) if row["team"] == our_slot), None)
 
@@ -558,12 +605,14 @@ def format_league_report(r: dict, sample_weeks=(1, 9, 17)) -> str:
         for wk in r["weeks"]:
             if wk["week"] not in sample_weeks:
                 continue
-            L.append(f"  Week {wk['week']} — {wk['points']:.1f} pts")
+            bp = wk.get("bench_points", 0.0)
+            L.append(f"  Week {wk['week']} — {wk['points']:.1f} pts "
+                     f"(bench {bp:.1f}, counts only to break a tie)")
             for s in wk["starters"]:
                 L.append(f"     {s['slot']:5s} {s['player']:22s} "
                          f"proj {s['proj']:5.1f}  actual {s['actual']:5.1f}")
             if wk["bench"]:
-                names = ", ".join(f"{b['player']}" for b in wk["bench"])
+                names = ", ".join(f"{b['player']} ({b['actual']:.0f})" for b in wk["bench"])
                 L.append(f"     bench: {names}")
 
     # Every team's final roster (starters-worth first, then bench).
