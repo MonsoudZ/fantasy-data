@@ -352,3 +352,31 @@ def test_playoff_tie_broken_by_bench_then_seed():
     qf = {(g[1], g[2]): g[3] for g in log if g[0] == 0}
     assert qf[(3, 4)] == 3, "bench point advances team 3 in the 4v5 game"
     assert champ == 0, "all else equal, the 1 seed wins on seed"
+
+
+def test_rookie_prior_seeds_only_players_never_projected():
+    """A rookie with no trailing data is absent from the weekly board -> would
+    project 0 and sit. Seed him from his preseason prior so he can start. But a
+    veteran absent this week (bye/injury) has been projected before -> he must
+    stay 0, or we'd start bye-week players and tank scores."""
+    from ffdata.season_sim import _seed_rookie_prior
+
+    prior = {"rookierb": 12.0, "vetwr": 9.0}
+    # Week 1: neither has been projected yet. The rookie AND the vet both get the
+    # prior (both are 'new' to the model this far).
+    ever = set()
+    wk1 = _seed_rookie_prior({"somevet": 15.0}, prior, ever)
+    assert wk1["rookierb"] == 12.0 and wk1["vetwr"] == 9.0
+    ever.update({"somevet"})
+
+    # Week 8: the vet HAS been projected (weeks 1-7), now he's on bye (absent).
+    # He must NOT get the prior back -- he sits at 0.
+    ever.update({"vetwr"})
+    wk8 = _seed_rookie_prior({"somevet": 15.0}, prior, ever)
+    assert "vetwr" not in wk8, "a projected-then-absent player is on bye, keep him out"
+    # A still-unseen rookie is still seeded.
+    assert wk8["rookierb"] == 12.0
+
+    # The real weekly number always wins over the prior.
+    wk = _seed_rookie_prior({"rookierb": 3.0}, prior, set())
+    assert wk["rookierb"] == 3.0

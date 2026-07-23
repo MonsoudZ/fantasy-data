@@ -60,6 +60,7 @@ ROSTER_SIZE = len(STARTERS) + BENCH          # 14
 LIMITS = {"QB": 2, "RB": 4, "WR": 4, "TE": 2, "DEF": 1, "K": 1}
 REG_WEEKS = tuple(range(1, 15))              # weeks 1-14
 PLAYOFF_WEEKS = (15, 16, 17)                 # 6-team bracket, top 2 get a bye
+NFL_GAMES = 17                               # to prorate a season projection -> a week
 # Smallest projected-points upgrade to a starting slot worth a waiver move. Real
 # managers have inertia; without this every team churns weekly on ~6-RMSE noise,
 # which (via bye weeks) circulates studs around the league and turns the whole
@@ -70,6 +71,27 @@ WAIVER_MIN_GAIN = 3.0
 # starting upgrade anyway, so the tail is dead weight -- capping it is realistic
 # and keeps the all-team replay fast enough to sweep every draft slot.
 WAIVER_POOL_PER_POS = 6
+
+
+def _seed_rookie_prior(wk_proj: dict, prior_wk: dict, ever_projected: set) -> dict:
+    """This week's projections, with a preseason prior filled in for players the
+    trailing model has NEVER seen (rookies / debuts with no games yet).
+
+    The weekly projector is trailing, so a rookie is simply absent from it and
+    would project 0 -- benched, or started blind. That penalises a rookie-heavy
+    draft the season model rated highly. Seed those players from their preseason
+    projection so the lineup can start them, as a real manager would on hype.
+
+    Critically NOT applied to a player already in `ever_projected`: if he was
+    projected in an earlier week and is absent now, he's on a bye or hurt, and
+    must stay ~0 so he sits -- otherwise we'd start bye-week players and tank
+    everyone's scores (measured: it dropped the league average from 74 to 67).
+    """
+    proj = dict(wk_proj)
+    for k, v in prior_wk.items():
+        if k not in proj and k not in ever_projected:
+            proj[k] = v
+    return proj
 
 
 def _beats(scores, bench, a, b, week) -> bool:
@@ -427,6 +449,17 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     rosters = run_snake_draft(boards, ROSTER_SIZE, LIMITS)
     drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
+    # Preseason per-week fallback, from the (leak-free) draft board. The weekly
+    # projector is TRAILING -- a rookie with no games yet is simply absent from
+    # its board, so proj=0 and the lineup benches him or starts him blind. That
+    # penalises a rookie-heavy draft the model itself rated highly (2025: we drew
+    # Jeanty, Hunter, McMillan, Egbuka, Golden...). A real manager starts a hyped
+    # rookie on preseason expectation, so seed a missing player's week from his
+    # season projection / a full season. Used ONLY when the weekly model has
+    # nothing; once he has trailing games, the weekly number takes over.
+    prior_wk = {_norm(p["player"]): p["proj"] / NFL_GAMES
+                for p in ours + naive if p.get("proj")}
+
     weeks = list(REG_WEEKS) + list(PLAYOFF_WEEKS)
     scores = np.zeros((n_teams, len(weeks)))       # STARTER points -- decide the game
     bench = np.zeros((n_teams, len(weeks)))        # BENCH points -- tiebreak only
@@ -439,6 +472,11 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     # only ever averages projections already computed, never results.
     psum: dict[str, float] = {}
     pcnt: dict[str, int] = {}
+    # Players the trailing model has EVER projected. A player absent this week who
+    # is in here is on a bye / injured -> he must stay ~0 and sit, NOT get his
+    # preseason prior (that would start bye-week players and tank scores). The
+    # prior fallback is only for players who have never been seen: rookies/debuts.
+    ever_projected: set[str] = set()
 
     def value_of(key: str, this_week: float) -> float:
         """Season-to-date average projection, seeded by this week's number."""
@@ -453,7 +491,9 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
             scores = scores[:, :wi]
             bench = bench[:, :wi]
             break
-        proj, _ = project(w)
+        wk_proj, _ = project(w)
+        proj = _seed_rookie_prior(wk_proj, prior_wk, ever_projected)
+        ever_projected.update(wk_proj)
         actual_w = by_week[w]
         for k, v in proj.items():           # fold this week into each player's form
             psum[k] = psum.get(k, 0.0) + v
