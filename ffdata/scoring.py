@@ -46,6 +46,13 @@ class ScoringRules:
     # Points-allowed uses a fixed standard tier ladder (see kdst._dst_pa_points),
     # not a per-field weight -- it's a step function, and every mainstream platform
     # ships the same brackets. Per-bracket customization is a later refinement.
+    # --- Yardage milestone bonuses (ESPN/Sleeper "in-depth" scoring) ---
+    # A once-per-game bonus when a player clears the yardage threshold. These are
+    # computable from the weekly box score (each `score()` row is one game), unlike
+    # long-TD or first-down bonuses, which need play-by-play and aren't modeled.
+    bonus_rush_100: float = 0.0   # +N for a 100-yard rushing game
+    bonus_rec_100: float = 0.0    # +N for a 100-yard receiving game
+    bonus_pass_300: float = 0.0   # +N for a 300-yard passing game
 
 
 PPR = ScoringRules()
@@ -104,6 +111,13 @@ def score(weekly: pd.DataFrame, rules: ScoringRules, col: str = "fp") -> pd.Data
     )
     if rules.te_reception_bonus and "position" in weekly:
         pts = pts + g("receptions") * rules.te_reception_bonus * (weekly["position"] == "TE")
+    # Yardage milestone bonuses fire once per game (each row is one game).
+    if rules.bonus_rush_100:
+        pts = pts + (g("rushing_yards") >= 100) * rules.bonus_rush_100
+    if rules.bonus_rec_100:
+        pts = pts + (g("receiving_yards") >= 100) * rules.bonus_rec_100
+    if rules.bonus_pass_300:
+        pts = pts + (g("passing_yards") >= 300) * rules.bonus_pass_300
 
     out = weekly.copy()
     out[col] = pts.round(2)

@@ -309,11 +309,13 @@ class TradeRequest(BoardRequest):
 
 def _league_cfg(teams: int, lineup: dict | None) -> dict:
     """A draft-league config: default lineup unless an imported one is supplied."""
-    cfg = {**DEFAULT_LEAGUE, "teams": teams, "superflex": 0}
+    cfg = {**DEFAULT_LEAGUE, "teams": teams, "superflex": 0, "wrte": 0, "rbwr": 0}
     if lineup:
         cfg["starters"] = {**DEFAULT_LEAGUE["starters"], **(lineup.get("starters") or {})}
         cfg["flex"] = int(lineup.get("flex", DEFAULT_LEAGUE["flex"]))
         cfg["superflex"] = int(lineup.get("superflex", 0))
+        cfg["wrte"] = int(lineup.get("wrte", 0))
+        cfg["rbwr"] = int(lineup.get("rbwr", 0))
     return cfg
 
 
@@ -321,7 +323,8 @@ def _lineup_key(lineup: dict | None):
     if not lineup:
         return None
     return (tuple(sorted((lineup.get("starters") or {}).items())),
-            lineup.get("flex"), lineup.get("superflex"))
+            lineup.get("flex"), lineup.get("superflex"),
+            lineup.get("wrte"), lineup.get("rbwr"))
 
 
 def _get_board(req: BoardRequest):
@@ -773,6 +776,9 @@ class LeagueModel(BaseModel):
     keepers: list = []
     rules: dict | None = None
     lineup: dict | None = None
+    roster: dict = Field(default_factory=lambda: {"QB": [], "RB": [], "WR": [], "TE": [], "K": [], "DEF": []})
+    opponents: list = []
+    fmt: dict | None = None
 
 
 class LeagueName(BaseModel):

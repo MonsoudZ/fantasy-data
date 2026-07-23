@@ -25,6 +25,19 @@ def test_map_roster_positions_counts_starters_flex_superflex():
     assert map_roster_positions(["DST"])["starters"]["DEF"] == 1
 
 
+def test_map_roster_positions_splits_the_two_position_flexes():
+    m = map_roster_positions(["QB", "RB", "WR", "REC_FLEX", "WRRB_FLEX", "FLEX"])
+    assert m["wrte"] == 1        # REC_FLEX = WR/TE
+    assert m["rbwr"] == 1        # WRRB_FLEX = RB/WR
+    assert m["flex"] == 1        # plain FLEX = RB/WR/TE
+
+
+def test_map_scoring_maps_yardage_milestone_bonuses():
+    r = map_scoring({"bonus_rush_yd_100": 3.0, "bonus_rec_yd_100": 2.0,
+                     "bonus_pass_yd_300": 3.0})
+    assert r.bonus_rush_100 == 3.0 and r.bonus_rec_100 == 2.0 and r.bonus_pass_300 == 3.0
+
+
 # --- scoring helpers round-trip ---
 
 def test_scoring_helpers_roundtrip():
@@ -107,6 +120,7 @@ def _fixture():
                    "scoring_settings": {"rec": 1.0, "bonus_rec_te": 0.5, "pass_td": 6},
                    "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "SUPER_FLEX",
                                         "DEF", "K", "BN"],
+                   "settings": {"type": 2},          # 2 = dynasty
                    "draft_id": "D1"},
         "rosters": [{"owner_id": "u123", "players": ["p1", "p2", "p3", "p5", "BUF"]},
                     {"owner_id": "u999", "players": ["p4"]}],
@@ -139,6 +153,13 @@ def test_import_league_builds_league_and_team():
     assert team.roster["DEF"] == ["BUF DST"]
     assert team.rules == league.rules
     team.validated()                                # roster normalizes, no raise
+
+    # The League is now self-contained: your roster folded in, the other manager's
+    # roster captured as an opponent, and the format read from settings.
+    assert league.roster["QB"] == ["Josh Allen"] and league.roster["DEF"] == ["BUF DST"]
+    assert len(league.opponents) == 1 and league.opponents[0]["players"] == ["CeeDee Lamb"]
+    assert league.fmt["type"] == "dynasty"
+    league.validated()
 
 
 # --------------------------------------------------------------------------- #

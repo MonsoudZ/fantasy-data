@@ -471,12 +471,20 @@ def _replacement_ranks(league: dict) -> dict:
     """
     t, s = league["teams"], league["starters"]
     base = {p: t * s.get(p, 0) for p in POSITIONS}
-    # spread FLEX slots across RB/WR/TE by their share of starting demand
-    flex_pool = t * league.get("flex", 0)
-    fx = ["RB", "WR", "TE"]
-    denom = sum(base[p] for p in fx) or 1
-    for p in fx:
-        base[p] += round(flex_pool * base[p] / denom)
+
+    # A flex pool deepens its eligible positions in proportion to their share of
+    # starting demand -- an RB/WR/TE flex mostly deepens whichever of the three the
+    # league already starts most of.
+    def spread(pool: int, positions: list[str]) -> None:
+        denom = sum(base[p] for p in positions) or 1
+        for p in positions:
+            base[p] += round(pool * base[p] / denom)
+
+    spread(t * league.get("flex", 0), ["RB", "WR", "TE"])
+    spread(t * league.get("wrte", 0), ["WR", "TE"])
+    spread(t * league.get("rbwr", 0), ["RB", "WR"])
+    # SUPERFLEX (QB-eligible) deepens QB -- a startable QB2 is the scarce asset
+    # those slots target, which is what lifts QB value in 2-QB/superflex leagues.
     base["QB"] += t * league.get("superflex", 0)
     return base
 

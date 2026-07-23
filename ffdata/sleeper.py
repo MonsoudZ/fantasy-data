@@ -102,6 +102,10 @@ def map_scoring(scoring_settings: dict) -> ScoringRules:
         dst_td=float(s.get("def_td", 6.0)),
         dst_safety=float(s.get("safe", 2.0)),
         dst_block=float(s.get("blk_kick", 2.0)),
+        # Yardage milestone bonuses (Sleeper "bonus_*_yd" keys); default off.
+        bonus_rush_100=float(s.get("bonus_rush_yd_100", 0.0)),
+        bonus_rec_100=float(s.get("bonus_rec_yd_100", 0.0)),
+        bonus_pass_300=float(s.get("bonus_pass_yd_300", 0.0)),
     )
 
 
@@ -129,12 +133,13 @@ def map_roster(rosters: list, user_id, players: dict) -> dict:
 def map_roster_positions(positions: list) -> dict:
     """Sleeper `roster_positions` -> starting-lineup slots.
 
-    Returns {"starters": {QB/RB/WR/TE/K/DEF counts}, "flex": n, "superflex": n}.
-    Bench (BN), IR, taxi, and IDP slots are ignored. SUPER_FLEX/OP are
-    QB-eligible; DEF/DST and K are counted so standard leagues start them.
+    Returns {"starters": {QB/RB/WR/TE/K/DEF counts}, "flex": n, "superflex": n,
+    "wrte": n, "rbwr": n}. Bench (BN), IR, taxi, and IDP slots are ignored.
+    SUPER_FLEX/OP are QB-eligible; REC_FLEX is WR/TE and WRRB_FLEX is RB/WR; a
+    plain FLEX is RB/WR/TE. DEF/DST and K are counted so standard leagues start them.
     """
     starters = {p: 0 for p in _ROSTER_POS}
-    flex = superflex = 0
+    flex = superflex = wrte = rbwr = 0
     for tok in positions or []:
         t = str(tok).upper()
         if t in ("DST", "D/ST"):        # normalize Sleeper's defense token to DEF
@@ -143,9 +148,55 @@ def map_roster_positions(positions: list) -> dict:
             starters[t] += 1
         elif t in ("SUPER_FLEX", "SUPERFLEX", "OP"):
             superflex += 1
-        elif "FLEX" in t:               # FLEX, REC_FLEX, WRRB_FLEX, ...
+        elif t in ("REC_FLEX", "WT_FLEX", "WRTE_FLEX"):   # WR/TE
+            wrte += 1
+        elif t in ("WRRB_FLEX", "RBWR_FLEX", "RB_WR"):    # RB/WR
+            rbwr += 1
+        elif "FLEX" in t:               # plain FLEX (RB/WR/TE), and any other flex
             flex += 1
-    return {"starters": starters, "flex": flex, "superflex": superflex}
+    return {"starters": starters, "flex": flex, "superflex": superflex,
+            "wrte": wrte, "rbwr": rbwr}
+
+
+def _roster_names(player_ids: list, players: dict) -> list[str]:
+    """Sleeper player ids -> our display names (team defense as '<TEAM> DST')."""
+    names = []
+    for pid in player_ids or []:
+        info = players.get(str(pid)) or {}
+        if info.get("position") == "DEF":
+            names.append(f"{info.get('team') or pid} DST")
+        elif info.get("full_name"):
+            names.append(info["full_name"])
+    return names
+
+
+def map_opponents(rosters: list, user_id, players: dict) -> list[dict]:
+    """Every OTHER manager's roster: [{"name", "players"}].
+
+    Powers waiver/free-agent exclusion (a player another team owns isn't available)
+    and lets the lineup tab target a specific weekly opponent. Named by Sleeper
+    owner id -- cosmetic, relabel in the hub."""
+    out = []
+    for r in rosters:
+        if str(r.get("owner_id")) == str(user_id):
+            continue
+        out.append({"name": str(r.get("owner_id") or f"roster {r.get('roster_id')}"),
+                    "players": _roster_names(r.get("players") or [], players)})
+    return out
+
+
+_LEAGUE_TYPE = {0: "redraft", 1: "keeper", 2: "dynasty"}
+
+
+def map_format(league_json: dict) -> dict:
+    """Sleeper league settings -> our format dict {type, draft, slot, budget}.
+
+    `type` (redraft/keeper/dynasty) is reliable from settings; draft type, slot,
+    and auction budget live in the draft object (not fetched here) so they default
+    to snake / unset and are filled in the hub editor."""
+    s = league_json.get("settings") or {}
+    return {"type": _LEAGUE_TYPE.get(int(s.get("type", 0) or 0), "redraft"),
+            "draft": "snake", "slot": 0, "budget": 0}
 
 
 def _pick_names(picks: list, players: dict) -> list[str]:
@@ -197,11 +248,15 @@ def import_league(league_id: str, username: str, season: int,
     picks = client.draft_picks(league_json["draft_id"]) if league_json.get("draft_id") else []
     drafted = _pick_names(picks, players)
     lineup = map_roster_positions(league_json.get("roster_positions") or [])
+    my_roster = map_roster(rosters, uid, players)
 
     league = League(name=name, season=season, teams=teams,
-                    scoring=label, rules=rules_dict, drafted=drafted, lineup=lineup)
-    team = Team(name=name, season=season, scoring=label, rules=rules_dict,
-                roster=map_roster(rosters, uid, players))
+                    scoring=label, rules=rules_dict, drafted=drafted, lineup=lineup,
+                    roster=my_roster, opponents=map_opponents(rosters, uid, players),
+                    fmt=map_format(league_json))
+    # A Team is still returned for the lineup tab's saved-team dropdown; the hub
+    # reads the roster off the League itself.
+    team = Team(name=name, season=season, scoring=label, rules=rules_dict, roster=my_roster)
     return league, team
 
 

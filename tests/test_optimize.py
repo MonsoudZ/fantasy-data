@@ -144,6 +144,17 @@ def test_slots_from_lineup_defaults_and_superflex():
     assert "QB" in _ELIGIBLE["SUPERFLEX"]
 
 
+def test_slots_from_lineup_supports_two_position_flexes():
+    slots = slots_from_lineup({"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                               "flex": 1, "wrte": 1, "rbwr": 1})
+    assert slots.count("WRTE") == 1 and slots.count("RBWR") == 1 and slots.count("FLEX") == 1
+    assert _ELIGIBLE["WRTE"] == {"WR", "TE"} and _ELIGIBLE["RBWR"] == {"RB", "WR"}
+    # Two-position flexes are emitted before the wide-open FLEX so greedy fill
+    # leaves the widest slot the most choices.
+    assert slots.index("WRTE") < slots.index("FLEX")
+    assert slots.index("RBWR") < slots.index("FLEX")
+
+
 def test_slots_from_lineup_adds_defense_and_kicker():
     slots = slots_from_lineup({"starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1},
                                "flex": 1, "superflex": 0})

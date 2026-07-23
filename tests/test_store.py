@@ -34,6 +34,33 @@ def test_league_custom_rules_and_lineup_roundtrip(store):
     assert got.lineup["superflex"] == 1
 
 
+def test_league_holds_roster_opponents_and_format(store):
+    save_league(League(
+        name="Home", season=2025,
+        roster={"QB": ["Josh Allen"], "RB": ["Bijan Robinson"]},
+        opponents=[{"name": "rival", "players": ["Ja'Marr Chase"]}],
+        fmt={"type": "dynasty", "draft": "auction", "slot": 3, "budget": 200},
+    ), path=store)
+    got = get_league("home", path=store)
+    # Roster is normalized to all six positions; the ones given survive.
+    assert got.roster["QB"] == ["Josh Allen"] and got.roster["RB"] == ["Bijan Robinson"]
+    assert set(got.roster) == {"QB", "RB", "WR", "TE", "K", "DEF"}
+    assert got.opponents[0]["players"] == ["Ja'Marr Chase"]
+    assert got.fmt["type"] == "dynasty" and got.fmt["budget"] == 200
+
+
+def test_at_most_three_leagues_but_overwrite_is_free(store):
+    from ffdata.store import MAX_LEAGUES
+    assert MAX_LEAGUES == 3
+    for n in ("A", "B", "C"):
+        save_league(League(name=n, season=2025), path=store)
+    with pytest.raises(ValueError, match="up to 3"):
+        save_league(League(name="D", season=2025), path=store)
+    # Overwriting one of the existing three is always allowed.
+    save_league(League(name="a", season=2026), path=store)
+    assert get_league("A", path=store).season == 2026
+
+
 def test_save_overwrites_same_name(store):
     save_league(League(name="Dynasty", season=2025, teams=12), path=store)
     save_league(League(name="dynasty", season=2026, teams=14), path=store)  # same key

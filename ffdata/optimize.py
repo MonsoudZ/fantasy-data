@@ -51,16 +51,19 @@ DEFAULT_SLOTS = ("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX")
 STANDARD_SLOTS = ("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "DEF", "K")
 _ELIGIBLE = {"QB": {"QB"}, "RB": {"RB"}, "WR": {"WR"}, "TE": {"TE"},
              "K": {"K"}, "DEF": {"DEF"},
+             "WRTE": {"WR", "TE"}, "RBWR": {"RB", "WR"},
              "FLEX": {"RB", "WR", "TE"}, "SUPERFLEX": {"QB", "RB", "WR", "TE"}}
 
 
 def slots_from_lineup(lineup: dict | None) -> tuple:
     """Turn a league lineup config into a slot tuple for the optimizer.
 
-    `lineup` is {"starters": {QB/RB/WR/TE/K/DEF: n}, "flex": n, "superflex": n} --
-    the same shape a Sleeper import produces. Falls back to DEFAULT_SLOTS when the
-    config is missing or empty, so a 1-QB league is unaffected; a superflex league
-    gets its SUPERFLEX slot, and a standard league its DEF and K slots.
+    `lineup` is {"starters": {QB/RB/WR/TE/K/DEF: n}, "flex": n, "superflex": n,
+    "wrte": n, "rbwr": n} -- the shape a Sleeper import produces, plus the rarer
+    two-position flexes some leagues run. Falls back to DEFAULT_SLOTS when missing
+    or empty. Slots are emitted most-restrictive-first (pure position, then the
+    two-position flexes, then FLEX, then SUPERFLEX) so the greedy fill leaves the
+    widest slots the most options.
     """
     if not lineup:
         return DEFAULT_SLOTS
@@ -68,6 +71,8 @@ def slots_from_lineup(lineup: dict | None) -> tuple:
     slots = []
     for pos in ("QB", "RB", "WR", "TE"):
         slots += [pos] * int(starters.get(pos, 0) or 0)
+    slots += ["WRTE"] * int(lineup.get("wrte", 0) or 0)
+    slots += ["RBWR"] * int(lineup.get("rbwr", 0) or 0)
     slots += ["FLEX"] * int(lineup.get("flex", 0) or 0)
     slots += ["SUPERFLEX"] * int(lineup.get("superflex", 0) or 0)
     slots += ["DEF"] * int(starters.get("DEF", 0) or 0)

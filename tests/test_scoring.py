@@ -50,3 +50,15 @@ def test_six_point_passing_td_config():
     rules = ScoringRules(pass_td=6.0)
     # base 34.0 with pass_td=4 for 2 TDs; at 6 pts that's +2 per TD = +4 -> 38.0
     assert _one(rules) == 38.0
+
+
+def test_yardage_milestone_bonuses_fire_once_per_game():
+    # STAT_LINE has exactly 300 passing yards -> the 300-yd bonus fires.
+    assert _one(ScoringRules(bonus_pass_300=3.0)) == 34.0 + 3.0
+    # ...but 20 rushing / 50 receiving yards are below their thresholds.
+    assert _one(ScoringRules(bonus_rush_100=3.0)) == 34.0
+    assert _one(ScoringRules(bonus_rec_100=3.0)) == 34.0
+    # A genuine 100-yard game earns the bonus exactly once (not per yard).
+    big = pd.DataFrame([weekly_row(position="RB", rushing_yards=120, receiving_yards=100)])
+    got = score(big, ScoringRules(bonus_rush_100=3.0, bonus_rec_100=2.0))["fp"].iloc[0]
+    assert got == 120 * 0.1 + 100 * 0.1 + 3.0 + 2.0    # 12 + 10 + 3 + 2 = 27

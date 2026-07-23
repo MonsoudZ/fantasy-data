@@ -25,11 +25,19 @@ from pathlib import Path
 _SCORING = ("ppr", "half", "standard")
 _PROJECTORS = ("gbm", "neural")
 _POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
+# You manage a handful of leagues, not a directory of them: cap the saved set so
+# the "My Leagues" hub stays a focused switcher rather than sprawling.
+MAX_LEAGUES = 3
 
 
 @dataclass
 class League:
-    """A saved league configuration + its live draft state."""
+    """A saved league -- everything needed to give advice tailored to it.
+
+    One league object is the single source of truth the whole app reads: its
+    scoring, its exact starting lineup, its format, YOUR roster in it, the other
+    managers' rosters, and the live draft state. Selecting it drives every tab.
+    """
 
     name: str
     season: int
@@ -40,9 +48,19 @@ class League:
     # Optional full custom scoring (ScoringRules field dict). When set it wins
     # over the `scoring` preset label -- how imported leagues keep exact scoring.
     rules: dict | None = None
-    # Optional starting-lineup shape {"starters": {...}, "flex": n, "superflex": n}
-    # (e.g. from a Sleeper import) so VOR reflects the league's real lineup.
+    # Optional starting-lineup shape {"starters": {...}, "flex": n, "superflex": n,
+    # "wrte": n, "rbwr": n, "bench": n} so VOR + the optimizer reflect the real lineup.
     lineup: dict | None = None
+    # YOUR roster in this league, by position -- so the lineup/waiver tabs don't
+    # re-enter it every visit. (Was a separate `Team`; folded in so a league is
+    # self-contained.)
+    roster: dict = field(default_factory=lambda: {p: [] for p in _POSITIONS})
+    # The other managers' rosters: [{"name": str, "players": [str]}]. Used to
+    # exclude unavailable players from waiver advice and to target a weekly opponent.
+    opponents: list = field(default_factory=list)
+    # League format: {"type": redraft|keeper|dynasty, "draft": snake|auction,
+    # "slot": int (your draft position), "budget": int (auction $)}.
+    fmt: dict | None = None
 
     def validated(self) -> "League":
         """Return self after checking fields; raise ValueError on bad input."""
@@ -54,10 +72,14 @@ class League:
             raise ValueError(f"teams must be in 2..32, got {self.teams}")
         if not (1999 <= int(self.season) <= 2100):
             raise ValueError(f"season out of range: {self.season}")
-        if self.rules is not None and not isinstance(self.rules, dict):
-            raise ValueError("rules must be a scoring field dict or null")
-        if self.lineup is not None and not isinstance(self.lineup, dict):
-            raise ValueError("lineup must be a dict or null")
+        for name, val in (("rules", self.rules), ("lineup", self.lineup), ("fmt", self.fmt)):
+            if val is not None and not isinstance(val, dict):
+                raise ValueError(f"{name} must be a dict or null")
+        if not isinstance(self.opponents, list):
+            raise ValueError("opponents must be a list")
+        # Normalize the roster to exactly the roster positions, lists of names.
+        src = self.roster if isinstance(self.roster, dict) else {}
+        self.roster = {p: [str(n) for n in src.get(p, []) or []] for p in _POSITIONS}
         return self
 
 
@@ -145,10 +167,17 @@ def get_league(name: str, path: Path | None = None) -> League | None:
 
 
 def save_league(league: League, path: Path | None = None) -> League:
-    """Create or overwrite a league (keyed by case-insensitive name)."""
+    """Create or overwrite a league (keyed by case-insensitive name).
+
+    Creating a NEW league beyond `MAX_LEAGUES` is refused (overwriting an existing
+    one is always fine) -- the hub is a small, curated set, not a directory.
+    """
     path = path or default_path()
     league = league.validated()
     raw = _load_raw(path)
+    if _key(league.name) not in raw and len(raw) >= MAX_LEAGUES:
+        raise ValueError(f"you can keep up to {MAX_LEAGUES} leagues; "
+                         "delete one before adding another")
     raw[_key(league.name)] = asdict(league)
     _write_raw(path, raw)
     return league
