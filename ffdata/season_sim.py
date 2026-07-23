@@ -356,7 +356,12 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
               "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
     board = draft_board(season, league, rules=rules, con=con)
     kdst = _preseason_kdst(con, season, rules)
-    ours = [{"player": r["player"], "position": r["position"], "proj": float(r["proj"])}
+    # Keep VOR and auction $ on each record -- they ARE the reason a VOR draft
+    # takes a player (highest value over replacement still available), so the
+    # report can explain every pick.
+    ours = [{"player": r["player"], "position": r["position"], "proj": float(r["proj"]),
+             "vor": float(r["vor"]), "auction": int(r["auction"]),
+             "player_id": r["player_id"]}
             for _, r in board.iterrows()] + kdst
     return ours, _naive_board(con, season, rules) + kdst
 
@@ -418,6 +423,67 @@ def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise):
                                      + _jitter(p["player"], t, noise))))
         return boards
     return [ours if t == our_slot else naive for t in range(n_teams)]
+
+
+def _overall_pick(rnd0: int, our_slot: int, n_teams: int) -> int:
+    """1-based overall pick for our team in a snake draft, given the 0-based round."""
+    if rnd0 % 2 == 0:                       # odd rounds (1,3,..) go left-to-right
+        return rnd0 * n_teams + our_slot + 1
+    return rnd0 * n_teams + (n_teams - our_slot)
+
+
+def _draft_why(drafted, season, rules, con, our_slot, n_teams):
+    """Explain every one of our picks: round, overall pick, value, and the reason.
+
+    A VOR snake draft takes the highest value-over-replacement player still
+    available that fits an open slot -- so VOR *is* the reason, and the situational
+    context (rookie draft capital, a vacated role, a team change) is the colour.
+    Returns one dict per pick, in draft order.
+    """
+    from .draft import player_context, rookie_context
+    try:
+        vctx = player_context(season, rules, con).set_index("player_id")
+    except Exception:  # noqa: BLE001 - context is a bonus, never fatal
+        vctx = None
+    try:
+        rk = {_norm(r["player"]): r for _, r in rookie_context(season, con=con).iterrows()}
+    except Exception:  # noqa: BLE001
+        rk = {}
+
+    seen: dict[str, int] = {}
+    out = []
+    for i, p in enumerate(drafted):
+        pos = p["position"]
+        seen[pos] = seen.get(pos, 0) + 1
+        why = []
+        rrow = rk.get(_norm(p["player"]))
+        if rrow is not None:
+            why.append(f"rookie — draft pick #{int(rrow['pick'])}")
+            if rrow.get("vacated_fp", 0) and rrow["vacated_fp"] > 40:
+                why.append(f"{int(rrow['vacated_fp'])} vacated at {rrow['team']}")
+        elif vctx is not None and p.get("player_id") in vctx.index:
+            c = vctx.loc[p["player_id"]]
+            if bool(c.get("moved")) and pd.notna(c.get("prior_team")):
+                why.append(f"{c['prior_team']}→{c['team']}")
+            blocked = c.get("blocked_by")
+            if pd.notna(blocked) and blocked:
+                why.append(f"behind {blocked}")
+            elif pos in ("RB", "WR", "TE"):
+                why.append("leads his room")
+            vac = c.get("vacated_fp")
+            if pd.notna(vac) and vac > 60:
+                why.append(f"{int(vac)} vacated")
+        out.append({
+            "round": i + 1,
+            "pick": _overall_pick(i, our_slot, n_teams),
+            "player": p["player"], "position": pos,
+            "pos_rank": seen[pos],                 # our Nth at this position
+            "proj": round(p.get("proj", 0.0)),
+            "vor": round(p.get("vor", 0.0)),
+            "auction": p.get("auction"),
+            "why": " · ".join(why),
+        })
+    return out
 
 
 def _lineup_record(roster, proj, actual):
@@ -594,6 +660,9 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
 
     return {"season": season, "our_slot": our_slot, "roster": rosters[our_slot],
             "drafted": drafted_rosters[our_slot], "drafted_all": drafted_rosters,
+            "draft_why": (_draft_why(drafted_rosters[our_slot], season, rules, con,
+                                     our_slot, n_teams) if detail else None),
+            "n_teams": n_teams,
             "final_rosters": rosters, "weeks": lineups[our_slot],
             "league_lineups": lineups if detail else None,
             "moves": txns[our_slot], "league_txns": txns if detail else None,
@@ -662,10 +731,22 @@ def format_league_report(r: dict, sample_weeks=(1, 9, 17)) -> str:
         L.append(f"  {i + 1:2d}. {_team_label(row['team'], our):14s} "
                  f"{wins:2d}-{games - wins:<2d}  {row['pf']:7.1f} PF{seed}{tag}")
 
-    # Our team in detail.
-    L.append("\nOUR DRAFT (blind, off the preseason board):")
-    for i, p in enumerate(r["drafted"]):
-        L.append(f"  R{i + 1:2d}  {p['position']:4s} {p['player']}")
+    # Our team in detail -- each pick with the value that drove it and why.
+    if r.get("draft_why"):
+        L.append("\nOUR DRAFT — blind off the preseason board. Each pick is the "
+                 "highest VOR still available that fits an open slot:")
+        L.append(f"  {'Rd':>2} {'Pk':>3}  {'Pos':4} {'Player':22} {'Proj':>4} "
+                 f"{'VOR':>5} {'$':>3}   Why")
+        for d in r["draft_why"]:
+            posrank = f"{d['position']}{d['pos_rank']}"
+            why = d["why"] or f"best {d['position']} left"
+            aud = "" if d["auction"] is None else f"{d['auction']:>3}"
+            L.append(f"  {d['round']:>2} {d['pick']:>3}  {posrank:4} {d['player']:22} "
+                     f"{d['proj']:>4} {d['vor']:>+5} {aud:>3}   {why}")
+    else:
+        L.append("\nOUR DRAFT (blind, off the preseason board):")
+        for i, p in enumerate(r["drafted"]):
+            L.append(f"  R{i + 1:2d}  {p['position']:4s} {p['player']}")
     if r["moves"]:
         L.append("\nOUR TRANSACTIONS (waiver add / drop, on projection):")
         for m in r["moves"]:
@@ -688,7 +769,14 @@ def format_league_report(r: dict, sample_weeks=(1, 9, 17)) -> str:
                 names = ", ".join(f"{b['player']} ({b['actual']:.0f})" for b in wk["bench"])
                 L.append(f"     bench: {names}")
 
-    # Every team's final roster (starters-worth first, then bench).
+    # Who every team took, round by round (the draft as it happened).
+    if r.get("drafted_all"):
+        L.append("\nDRAFT BOARD — every team's pick each round (snake order):")
+        for t, roster in enumerate(r["drafted_all"]):
+            picks = " | ".join(f"{p['position']} {p['player']}" for p in roster)
+            L.append(f"  {_team_label(t, our):14s}: {picks}")
+
+    # Every team's roster AS IT ENDED, after a season of waivers.
     if r.get("final_rosters"):
         L.append("\nEVERY TEAM'S FINAL ROSTER (after the season's waivers):")
         for t, roster in enumerate(r["final_rosters"]):

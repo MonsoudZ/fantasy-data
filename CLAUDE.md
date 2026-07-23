@@ -102,20 +102,28 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 
   | vs the field | mean finish | playoffs | titles | (chance) |
   |---|---|---|---|---|
-  | **naive** (rank by raw prior points) | 4.60 | 73% | **27%** | 6.5 / 50% / 8.3% |
-  | **sharp** (draft our VOR board + per-team noise) | 5.40 | 65% | **8.3%** | " |
+  | **naive** (rank by raw prior points) | 6.15 | 56% | **4%** | 6.5 / 50% / 8.3% |
+  | **sharp** (draft our VOR board + per-team noise) | 6.00 | 56% | **10%** | " |
 
-  The naive field ranks by *raw* points, so it reaches for QBs (a QB outscores any
-  RB outright) and leaves every elite RB/WR on the board — VOR feasts, 27% titles.
-  But against a field that also drafts by value, **our title rate is exactly the
-  base rate (4/48 = 8.3%)** and mean finish is barely above average (5.40 vs 6.5).
-  The board's real contribution is capturing positional scarcity; once opponents
-  do that too, the edge is a coin flip. Highly season-dependent either way (naive
-  2022 mean 1.92 / 9 titles, 2023 mean 7.08 / 0) — one season is an anecdote, which
-  is why we sweep all 12 slots × 4 years.
-  Earlier notes here claimed "mean 3.36, stable, wins the regular season"; that was
-  measured with only OUR team taking waivers (an unfair edge) against the naive
-  field only. Corrected: all teams manage, and the sharp field is the honest test.
+  **With realistic roster management, the board has no measurable edge** — mean
+  finish ~6 of 12 (chance 6.5) and a title rate at the base rate, against *either*
+  field. This is the honest number and it is much lower than earlier notes here.
+  Two corrections got it there:
+  1. **Only our team used to take waivers** — an unfair edge. Now all 12 manage.
+  2. **The sim used to bench our drafted rookies** (a rookie with no games is
+     absent from the trailing weekly model → projected 0 → sat), which flattered
+     us: it quietly fielded replacement veterans instead of the busts we drafted.
+     Now rookies start on their preseason prior (`_seed_rookie_prior`), as a real
+     manager would — and they bust, which is where the edge went.
+  The draft view (`format_league_report`) shows the cause directly: the VOR board,
+  fed the **draft-capital rookie projections**, drafts rookies with *negative* VOR
+  (2025 slot 1: Tetairoa McMillan −5, Emeka Egbuka −8, Cam Ward −69) because those
+  projections are full-season and rookies underperform them early. **Open question
+  worth a backtest: the rookie season-projection looks too high for redraft; a
+  discount, or benching unproven rookies behind veterans, would likely recover
+  most of the lost finish.** Still season-dependent (naive 2022 mean 3.75 / 8
+  titles, 2023 mean 7.25 / 0) — one season is an anecdote, hence the 12-slot × 4-yr
+  sweep.
   Two mechanisms the sweep exposed and now guards:
   - **Bye-week stud circulation.** Waivers on a single week's projection drop a
     stud who's on bye (projects ~0) for a streamer; studs then circulate the
