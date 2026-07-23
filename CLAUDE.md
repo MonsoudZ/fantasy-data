@@ -31,7 +31,7 @@ Network access required (nflverse pulls over HTTP).
 | `optimize.py` | lineup optimizer (h2h / tournament / stack), superflex + DEF/K slots, free-agent finder + weekly CLI |
 | `kdst.py` | kicker + team-defense (DST) scoring & leak-free trailing projections |
 | `backtest_draft.py` | draft-and-win backtest; grades with a HINDSIGHT lineup (isolates draft value only) |
-| `season_sim.py` | blind season replay: draft, then set lineups + run waivers on projections alone |
+| `season_sim.py` | blind season replay: all 12 teams drafted + managed on projections; naive/sharp fields |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
@@ -92,31 +92,40 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - Draft: the season GBM alone loses to naive "last year's points"; the shipped
   projection is a **0.4-model / 0.6-prior blend** (rank ~0.72). Delta-method age
   curves: RB peaks ~24 (cliff), WR ~25, TE ages gracefully.
-- **The app wins the regular season; the playoff is a lottery.**
-  `season_sim.run_all_slots` drafts blind off the preseason board, then manages
-  every week on projections only (start-by-projection, waivers on next week's
-  numbers, actual points read solely to grade a lineup already locked). Measured
-  over **36 runs** — 2022/23/24 × all 12 draft slots, 1QB/2RB/2WR/1TE/FLEX/DEF/K
-  + 5 bench, standard scoring, 11 opponents drafting off last year's points:
+- **The draft edge is almost entirely "don't hoard QBs."** `season_sim` plays a
+  real past season blind: draft off the preseason board, then manage every one of
+  the 12 teams on projections only (start-by-projection, worst-first waivers on
+  FORM not one noisy week, actual points read solely to grade a locked lineup).
+  Measured over **48 runs per field** — 2022/23/24/25 × all 12 draft slots,
+  1QB/2RB/2WR/1TE/FLEX/DEF/K + 5 bench, standard scoring — against two opponent
+  models (`opponent=`):
 
-  | | ours | chance |
-  |---|---|---|
-  | mean finish | **3.36** of 12 | 6.5 |
-  | made playoffs | **92%** (33/36) | 50% |
-  | top-3 | 67% | 25% |
-  | **titles** | **11%** (4/36) | 8.3% |
+  | vs the field | mean finish | playoffs | titles | (chance) |
+  |---|---|---|---|---|
+  | **naive** (rank by raw prior points) | 4.60 | 73% | **27%** | 6.5 / 50% / 8.3% |
+  | **sharp** (draft our VOR board + per-team noise) | 5.40 | 65% | **8.3%** | " |
 
-  The regular-season edge is huge and stable across all three seasons (mean 3.5 /
-  2.67 / 3.92). The title rate is **not distinguishable from chance** — 11% ± 5%
-  on n=36 against an 8.3% baseline. A 3-week single-elimination bracket is mostly
-  variance, and no amount of projection quality fixes that. Sell the playoff
-  berth, not the trophy.
-  Two honest caveats: opponents draft by *raw* prior-season points, which ignores
-  positional scarcity, so they hoover up QBs early and we routinely end the draft
-  with a bad one (2024: Michael Penix + Drake Maye) — waivers then fix it in week
-  2. And the same run demonstrates why in-season management matters: our 1.01 pick
-  was Christian McCaffrey, who played four games; the waiver rule dropped him in
-  week 3 when his projection collapsed.
+  The naive field ranks by *raw* points, so it reaches for QBs (a QB outscores any
+  RB outright) and leaves every elite RB/WR on the board — VOR feasts, 27% titles.
+  But against a field that also drafts by value, **our title rate is exactly the
+  base rate (4/48 = 8.3%)** and mean finish is barely above average (5.40 vs 6.5).
+  The board's real contribution is capturing positional scarcity; once opponents
+  do that too, the edge is a coin flip. Highly season-dependent either way (naive
+  2022 mean 1.92 / 9 titles, 2023 mean 7.08 / 0) — one season is an anecdote, which
+  is why we sweep all 12 slots × 4 years.
+  Earlier notes here claimed "mean 3.36, stable, wins the regular season"; that was
+  measured with only OUR team taking waivers (an unfair edge) against the naive
+  field only. Corrected: all teams manage, and the sharp field is the honest test.
+  Two mechanisms the sweep exposed and now guards:
+  - **Bye-week stud circulation.** Waivers on a single week's projection drop a
+    stud who's on bye (projects ~0) for a streamer; studs then circulate the
+    league on their byes and the title becomes a lottery. Fixed: waivers value a
+    player by season-to-date FORM (`WAIVER_MIN_GAIN`, form-smoothing), so a bye
+    barely moves him. Without it, moves ran ~16/team/season; with it, ~0-4.
+  - **Draft ≠ the whole game.** Our 2024 1.01 was Christian McCaffrey (4 games
+    played); the waiver rule dropped him in week 3 when his form collapsed. The
+    naive field's QB-hoarding leaves us a bad QB (2025: Cam Ward), fixed on waivers
+    by week 2 (Dak Prescott).
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 

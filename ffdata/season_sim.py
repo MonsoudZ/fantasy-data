@@ -9,9 +9,10 @@ This module answers the harder question: **would the app have won the league?**
 Every decision is made with only what was knowable at the time.
 
     week w:  project    <- MatchupSimulator.project(season, w) trains on _k < w
-             start      <- best lineup BY PROJECTION
+             start      <- best lineup BY PROJECTION, for ALL 12 teams
              score      <- the points those starters actually scored
-             waivers    <- swap in a free agent only if projected better
+             waivers    <- every team, worst-first, adds a free agent if it's a
+                           real upgrade (by FORM, not one noisy week)
 
 Three separate walls against hindsight, each enforced in code rather than by
 convention:
@@ -24,12 +25,17 @@ convention:
   * actual points are read ONLY to score a lineup that was already locked, and
     to run waivers for the FOLLOWING week.
 
-Because the whole league is managed the same way, the comparison is fair: our
-team's edge has to come from better projections and better roster decisions, not
-from a rule the opponents don't get.
+EVERY team is managed the same way -- so our edge has to come from the draft, not
+from being the only team that touches its roster (which the first version quietly
+gave us). Two things made all-team management realistic rather than chaotic:
+waivers value a player by his season-to-date FORM, so a stud on bye isn't dropped
+for a streamer; and a move needs a real projected upgrade (`WAIVER_MIN_GAIN`), so
+teams don't churn every week on ~6-RMSE noise. Without those, over-managing on
+single-week projections circulated studs around the league on their byes and made
+the title a coin flip -- a genuine finding, now guarded against.
 
-    from ffdata.season_sim import run_season
-    print(run_season(2024))
+    from ffdata.season_sim import run_season, format_league_report
+    print(format_league_report(run_season(2024, detail=True)))   # full league
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from .backtest_draft import _naive_board, round_robin, run_snake_draft, standing
 from .db import connect
 from .kdst import build_dst, build_kicker, project_kdst, score_dst, score_kicker
 from .optimize import _ELIGIBLE, _norm
-from .scoring import STANDARD, ScoringRules, score
+from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
 
 # 1 QB, 2 RB, 2 WR, 1 TE, 1 FLEX, 1 DEF, 1 K.
 STARTERS = ("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "DEF", "K")
@@ -54,6 +60,16 @@ ROSTER_SIZE = len(STARTERS) + BENCH          # 14
 LIMITS = {"QB": 2, "RB": 4, "WR": 4, "TE": 2, "DEF": 1, "K": 1}
 REG_WEEKS = tuple(range(1, 15))              # weeks 1-14
 PLAYOFF_WEEKS = (15, 16, 17)                 # 6-team bracket, top 2 get a bye
+# Smallest projected-points upgrade to a starting slot worth a waiver move. Real
+# managers have inertia; without this every team churns weekly on ~6-RMSE noise,
+# which (via bye weeks) circulates studs around the league and turns the whole
+# thing into a lottery. Measured effect of setting it: see the module finding.
+WAIVER_MIN_GAIN = 3.0
+# How many free agents per position each team actually considers on waivers. A
+# team never rosters the 100th-best available WR, and run_waivers only adds a
+# starting upgrade anyway, so the tail is dead weight -- capping it is realistic
+# and keeps the all-team replay fast enough to sweep every draft slot.
+WAIVER_POOL_PER_POS = 6
 
 
 def playoff_bracket(seeds: list[int], scores, weeks: list[int]) -> tuple[int, list]:
@@ -207,12 +223,18 @@ class WeekProjections:
 
 
 def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
-                slots=STARTERS, limits=LIMITS) -> tuple[list[dict], dict | None]:
+                slots=STARTERS, limits=LIMITS,
+                min_gain: float = 0.0) -> tuple[list[dict], dict | None]:
     """Swap our worst benchable player for the best free agent, if it's an upgrade.
 
     "Upgrade" is measured the way the free-agent tab measures it: how much the
     STARTING lineup's projection improves. A better bench player is worth nothing
     if he never starts, so a swap only happens when the starting total moves.
+
+    `proj` should be a player's FORM (season-to-date average), not a single week:
+    a real manager doesn't drop a stud who happens to be on bye. `min_gain` is the
+    smallest improvement worth a roster move -- above ~0 it stops teams churning
+    every week chasing projection noise (~6 RMSE on any single week).
     """
     base = sum(proj.get(_norm(p["player"]), 0.0)
                for p in start_by_projection(roster, proj, slots))
@@ -220,7 +242,7 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
     for p in roster:
         counts[p["position"]] = counts.get(p["position"], 0) + 1
 
-    best, best_gain = None, 1e-9          # strictly positive: never churn for nothing
+    best, best_gain = None, max(min_gain, 1e-9)   # never churn for nothing
     on_roster = {_norm(p["player"]) for p in roster}
     for fa in pool:
         if _norm(fa["player"]) in on_roster:
@@ -288,27 +310,102 @@ def prepare(season: int, rules: ScoringRules = STANDARD, projector: str = "gbm",
             "by_week": by_week, "season": season, "rules": rules, "n_teams": n_teams}
 
 
+def _jitter(name: str, team: int, scale: float) -> float:
+    """Deterministic per-team noise on a player's draft value, in [-scale, scale].
+
+    A stand-in for differing manager opinions -- reproducible (a hash, not RNG,
+    which the sandbox forbids anyway) so the whole simulation stays deterministic.
+    """
+    import hashlib
+    h = int(hashlib.md5(f"{name}|{team}".encode()).hexdigest()[:8], 16)
+    return (h / 0xFFFFFFFF - 0.5) * 2 * scale
+
+
+def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise):
+    """The board each team drafts from.
+
+    - "naive": opponents rank by last year's RAW points. They hoard QBs (a QB
+      outscores any RB outright) and leave every elite RB/WR on the board, so a
+      VOR drafter feasts. A weak, unrealistic field -- good for showing the board
+      captures positional scarcity, bad for claiming we'd win a real league.
+    - "sharp": opponents draft off the SAME VOR board we do, each reranked by its
+      own `_jitter` (differing opinions). Now everyone drafts well and our only
+      edge is being the *un-noised* board -- the honest, hard test.
+    """
+    if opponent == "sharp":
+        boards = []
+        for t in range(n_teams):
+            if t == our_slot or noise <= 0:
+                boards.append(ours)
+            else:
+                boards.append(sorted(ours, key=lambda p: -(p["proj"]
+                                     + _jitter(p["player"], t, noise))))
+        return boards
+    return [ours if t == our_slot else naive for t in range(n_teams)]
+
+
+def _lineup_record(roster, proj, actual):
+    """A week's lineup for one team: who STARTED (with slot) and who sat (bench)."""
+    starters = start_by_projection(roster, proj, STARTERS)
+    started = {_norm(p["player"]) for p in starters}
+    bench = [{"player": p["player"], "position": p["position"],
+              "proj": round(proj.get(_norm(p["player"]), 0.0), 1),
+              "actual": round(actual.get(_norm(p["player"]), 0.0), 1)}
+             for p in roster if _norm(p["player"]) not in started]
+    return {
+        "starters": [{"slot": p["slot"], "player": p["player"], "position": p["position"],
+                      "proj": round(proj.get(_norm(p["player"]), 0.0), 1),
+                      "actual": round(actual.get(_norm(p["player"]), 0.0), 1)}
+                     for p in starters],
+        "bench": sorted(bench, key=lambda b: -b["proj"]),
+    }
+
+
 def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                our_slot: int = 0, projector: str = "gbm", waivers: bool = True,
-               con=None, log=print, ctx: dict | None = None) -> dict:
-    """Draft blind, manage every week on projections only, report where we finish.
+               con=None, log=print, ctx: dict | None = None, detail: bool = False,
+               league_waivers: bool = True, opponent: str = "naive",
+               noise: float = 24.0) -> dict:
+    """Draft blind, manage every week on projections only, report the whole league.
 
-    Returns the full record: roster, weekly lineups and scores, standings, and
-    the playoff result.
+    EVERY team is managed the same way -- best lineup by projection each week, and
+    a waiver claim if a free agent would raise its starting total -- so our edge
+    has to come from the draft, not from being the only team that touches its
+    roster (which is what the earlier version quietly gave us).
+
+    Waivers run in priority order: worst team so far claims first, standard league
+    rules. That both resolves who lands a contested free agent and stops the same
+    player being added by two teams in one week.
+
+    `detail=True` keeps every team's weekly starters/bench and transaction log --
+    heavy, for a single inspectable season. `run_all_slots` leaves it off.
     """
     ctx = ctx or prepare(season, rules, projector, n_teams, con, log)
     ours, naive = ctx["ours"], ctx["naive"]
     project, by_week, n_teams = ctx["project"], ctx["by_week"], ctx["n_teams"]
 
     log(f"Snake draft: {n_teams} teams x {ROSTER_SIZE} rounds, we pick at slot {our_slot + 1}")
-    boards = [ours if t == our_slot else naive for t in range(n_teams)]
+    boards = _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise)
     rosters = run_snake_draft(boards, ROSTER_SIZE, LIMITS)
-    drafted_roster = [dict(p) for p in rosters[our_slot]]
+    drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
     weeks = list(REG_WEEKS) + list(PLAYOFF_WEEKS)
     scores = np.zeros((n_teams, len(weeks)))
-    moves, our_weeks = [], []
-    drafted = {_norm(p["player"]) for r in rosters for p in r}
+    taken = {_norm(p["player"]) for r in rosters for p in r}
+    txns: list[list[dict]] = [[] for _ in range(n_teams)]
+    lineups: list[list[dict]] = [[] for _ in range(n_teams)]
+    # A running mean of each player's weekly projections -- his "form" to date.
+    # Waivers decide on THIS, not the single upcoming week, so a stud on bye
+    # (who projects ~0 next week) isn't dropped for a streamer. Leak-free: it
+    # only ever averages projections already computed, never results.
+    psum: dict[str, float] = {}
+    pcnt: dict[str, int] = {}
+
+    def value_of(key: str, this_week: float) -> float:
+        """Season-to-date average projection, seeded by this week's number."""
+        if key in pcnt:
+            return (psum[key] + this_week) / (pcnt[key] + 1)
+        return this_week
 
     for wi, w in enumerate(weeks):
         if w not in by_week:
@@ -318,28 +415,52 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
             break
         proj, _ = project(w)
         actual_w = by_week[w]
+        for k, v in proj.items():           # fold this week into each player's form
+            psum[k] = psum.get(k, 0.0) + v
+            pcnt[k] = pcnt.get(k, 0) + 1
 
         for t in range(n_teams):
-            lineup = start_by_projection(rosters[t], proj, STARTERS)
-            scores[t, wi] = week_score(lineup, actual_w)
-            if t == our_slot:
-                our_weeks.append({"week": w, "points": scores[t, wi],
-                                  "lineup": [{"slot": p["slot"], "player": p["player"],
-                                              "proj": round(proj.get(_norm(p["player"]), 0.0), 1),
-                                              "actual": round(actual_w.get(_norm(p["player"]), 0.0), 1)}
-                                             for p in lineup]})
-        # Waivers run AFTER the week is scored, on next week's projection --
-        # the same order a real league runs them.
+            starters = start_by_projection(rosters[t], proj, STARTERS)
+            scores[t, wi] = week_score(starters, actual_w)
+            if detail or t == our_slot:
+                rec = _lineup_record(rosters[t], proj, actual_w)
+                rec.update(week=w, points=scores[t, wi])
+                lineups[t].append(rec)
+
+        # Waivers run AFTER the week is scored, on NEXT week's projection -- the
+        # order a real league runs them. Worst-team-first priority.
         if waivers and wi + 1 < len(weeks):
             nxt, nxt_pool = project(weeks[wi + 1])
-            pool = [{"player": p, "position": pos} for p, pos in nxt_pool
-                    if _norm(p) not in drafted]
-            rosters[our_slot], mv = run_waivers(rosters[our_slot], pool, nxt)
-            if mv:
-                mv["week"] = weeks[wi + 1]
-                moves.append(mv)
-                drafted.add(_norm(mv["add"]))
-                drafted.discard(_norm(mv["drop"]))
+            # Value every roster/pool player by his form, not the single upcoming
+            # week -- and only over players actually available or rostered.
+            wval = {k: value_of(k, nxt.get(k, 0.0))
+                    for k in set(nxt) | taken}
+            # Only the best free agents matter: run_waivers requires a starting-
+            # lineup upgrade, so a replacement-level FA is never added. Keeping the
+            # top few per position by form is realistic (no one rosters the 100th
+            # WR) and ~5x faster than scanning all ~230 free agents each team-week.
+            ranked_fa = sorted(((p, pos) for p, pos in nxt_pool),
+                               key=lambda x: -wval.get(_norm(x[0]), 0.0))
+            per_pos: dict[str, int] = {}
+            shortlist = []
+            for p, pos in ranked_fa:
+                if per_pos.get(pos, 0) < WAIVER_POOL_PER_POS:
+                    shortlist.append((p, pos))
+                    per_pos[pos] = per_pos.get(pos, 0) + 1
+            # league_waivers=False reproduces the earlier behaviour (only our
+            # team manages its roster) for an apples-to-apples comparison.
+            order = _waiver_order(scores[:, :wi + 1]) if league_waivers else [our_slot]
+            for t in order:
+                pool = [{"player": p, "position": pos} for p, pos in shortlist
+                        if _norm(p) not in taken]
+                rosters[t], mv = run_waivers(rosters[t], pool, wval,
+                                             min_gain=WAIVER_MIN_GAIN)
+                if mv:
+                    mv["week"] = weeks[wi + 1]
+                    taken.add(_norm(mv["add"]))
+                    taken.discard(_norm(mv["drop"]))
+                    if detail or t == our_slot:
+                        txns[t].append(mv)
         log(f"  week {w}: we scored {scores[our_slot, wi]:.1f}")
 
     sched = round_robin(n_teams, len(REG_WEEKS))
@@ -352,15 +473,24 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     place = next((i + 1 for i, row in enumerate(table) if row["team"] == our_slot), None)
 
     return {"season": season, "our_slot": our_slot, "roster": rosters[our_slot],
-            "drafted": drafted_roster,
-            "weeks": our_weeks, "moves": moves, "standings": table,
+            "drafted": drafted_rosters[our_slot], "drafted_all": drafted_rosters,
+            "final_rosters": rosters, "weeks": lineups[our_slot],
+            "league_lineups": lineups if detail else None,
+            "moves": txns[our_slot], "league_txns": txns if detail else None,
+            "standings": table, "seeds": seeds, "bracket": bracket,
             "regular_season_place": place, "champion": champ,
             "we_won": champ == our_slot, "scores": scores, "week_numbers": weeks}
 
 
+def _waiver_order(scores_so_far) -> list[int]:
+    """Waiver priority: fewest points so far claims first (standard worst-first)."""
+    totals = scores_so_far.sum(axis=1)
+    return list(np.argsort(totals, kind="stable"))
+
+
 def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                   projector: str = "gbm", waivers: bool = True, con=None,
-                  log=print) -> dict:
+                  log=print, opponent: str = "naive", noise: float = 24.0) -> dict:
     """Replay the season from EVERY draft slot and report the distribution.
 
     One season from one slot is a single sample: draft position and the
@@ -373,7 +503,8 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
     runs = []
     for slot in range(n_teams):
         r = run_season(season, rules, n_teams, slot, projector, waivers,
-                       con, log=lambda *a: None, ctx=ctx)
+                       con, log=lambda *a: None, ctx=ctx,
+                       opponent=opponent, noise=noise)
         runs.append(r)
         log(f"  slot {slot + 1:2d}: finished {r['regular_season_place']:2d} of {n_teams}"
             f"  ({'CHAMPION' if r['we_won'] else 'no title'})")
@@ -382,3 +513,102 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
             "titles": sum(r["we_won"] for r in runs),
             "mean_place": round(sum(places) / len(places), 2),
             "playoff_rate": round(sum(p <= 6 for p in places) / len(places), 3)}
+
+
+def _team_label(t: int, our_slot: int) -> str:
+    return f"Team {t + 1}" + (" (US)" if t == our_slot else "")
+
+
+def format_league_report(r: dict, sample_weeks=(1, 9, 17)) -> str:
+    """Human-readable full-league report for a `detail=True` run.
+
+    Shows the final standings, our draft and how it changed, every team's final
+    roster split into starters-calibre and bench, and the transaction log -- the
+    "who's on each team, who started, who got dropped" the summary can't convey.
+    """
+    L, our = [], r["our_slot"]
+    place = r["regular_season_place"]
+    champ = r["champion"]
+    L.append(f"=== {r['season']} — drafted from slot {our + 1}, "
+             f"finished {place} of {len(r['standings'])} "
+             f"({'CHAMPION' if r['we_won'] else 'team ' + str(champ + 1) + ' won'}) ===")
+
+    L.append("\nFinal standings (regular season):")
+    games = len(REG_WEEKS)
+    for i, row in enumerate(r["standings"]):
+        tag = "  <-- US" if row["team"] == our else ""
+        seed = " [playoffs]" if row["team"] in r["seeds"] else ""
+        wins = int(row["wins"])
+        L.append(f"  {i + 1:2d}. {_team_label(row['team'], our):14s} "
+                 f"{wins:2d}-{games - wins:<2d}  {row['pf']:7.1f} PF{seed}{tag}")
+
+    # Our team in detail.
+    L.append("\nOUR DRAFT (blind, off the preseason board):")
+    for i, p in enumerate(r["drafted"]):
+        L.append(f"  R{i + 1:2d}  {p['position']:4s} {p['player']}")
+    if r["moves"]:
+        L.append("\nOUR TRANSACTIONS (waiver add / drop, on projection):")
+        for m in r["moves"]:
+            L.append(f"  wk{m['week']:2d}  + {m['add']:24s} - {m['drop']:24s} "
+                     f"(+{m['gain']:.1f} proj to starters)")
+
+    # A few weekly lineups so "who started" is concrete.
+    if r["weeks"]:
+        L.append("\nOUR LINEUPS (sampled weeks):")
+        for wk in r["weeks"]:
+            if wk["week"] not in sample_weeks:
+                continue
+            L.append(f"  Week {wk['week']} — {wk['points']:.1f} pts")
+            for s in wk["starters"]:
+                L.append(f"     {s['slot']:5s} {s['player']:22s} "
+                         f"proj {s['proj']:5.1f}  actual {s['actual']:5.1f}")
+            if wk["bench"]:
+                names = ", ".join(f"{b['player']}" for b in wk["bench"])
+                L.append(f"     bench: {names}")
+
+    # Every team's final roster (starters-worth first, then bench).
+    if r.get("final_rosters"):
+        L.append("\nEVERY TEAM'S FINAL ROSTER (after the season's waivers):")
+        for t, roster in enumerate(r["final_rosters"]):
+            names = ", ".join(f"{p['player']} ({p['position']})" for p in roster)
+            L.append(f"  {_team_label(t, our):14s}: {names}")
+
+    return "\n".join(L)
+
+
+def main() -> None:
+    import argparse
+
+    from .ingest import current_nfl_season
+
+    p = argparse.ArgumentParser(
+        prog="python -m ffdata.season_sim",
+        description="Play a real past season blind: draft on prior-year data, then "
+                    "manage every team on projections only. Reports the whole league.")
+    p.add_argument("--season", type=int, default=current_nfl_season(),
+                   help="a PLAYED season to replay (needs its weekly results)")
+    p.add_argument("--slot", type=int, default=1, help="our draft slot, 1-based")
+    p.add_argument("--scoring", choices=["ppr", "half", "standard"], default="standard")
+    p.add_argument("--all-slots", action="store_true",
+                   help="replay from every draft slot and print the finish distribution")
+    args = p.parse_args()
+
+    from .ingest import season_not_started
+    if season_not_started(args.season):
+        raise SystemExit(f"{args.season} hasn't been played yet -- pick a finished season.")
+
+    rules = {"ppr": PPR, "half": HALF_PPR, "standard": STANDARD}[args.scoring]
+
+    if args.all_slots:
+        r = run_all_slots(args.season, rules=rules)
+        p_ = r["places"]
+        print(f"\n{args.season}: mean finish {r['mean_place']}/12 · "
+              f"playoffs {r['playoff_rate']:.0%} · titles {r['titles']}/12 · places {p_}")
+        return
+
+    r = run_season(args.season, rules=rules, our_slot=args.slot - 1, detail=True)
+    print("\n" + format_league_report(r))
+
+
+if __name__ == "__main__":
+    main()

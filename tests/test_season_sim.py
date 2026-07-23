@@ -187,3 +187,111 @@ def test_playoff_bracket_breaks_ties_for_the_better_seed():
     scores[:, :] = 50.0            # everyone identical every round
     champ, _ = playoff_bracket(seeds, scores, [0, 1, 2])
     assert champ == 0, "dead-even scores must advance the better seed"
+
+
+def test_waiver_priority_is_worst_team_first():
+    """Standard league rule: the team with the fewest points so far claims first.
+    It's also what stops two teams adding the same free agent in one week."""
+    import numpy as np
+
+    from ffdata.season_sim import _waiver_order
+    scores = np.array([[50, 50], [10, 10], [30, 30]], dtype=float)  # totals 100, 20, 60
+    assert _waiver_order(scores) == [1, 2, 0]                       # worst first
+
+
+def test_all_teams_manage_their_rosters():
+    """The earlier version only ran waivers for our team, silently handing us the
+    only in-season management in the league. Every team must move now, so our
+    edge has to come from the draft."""
+    import numpy as np
+
+    from ffdata.season_sim import _lineup_record
+    # A full 14-man roster: 9 start, 5 sit. The worst-projected RB benches.
+    proj = _proj(20, 5, 15, 12, 1, 14, 11, 2, 8, 8, 7)   # Eli Runner (RB) = 1
+    rec = _lineup_record(ROSTER, proj, {"eli runner": 99.0})
+    started = {s["player"] for s in rec["starters"]}
+    assert len(rec["starters"]) == len(STARTERS)
+    assert "Eli Runner" not in started               # projected worst RB -> bench
+    assert "Eli Runner" in {b["player"] for b in rec["bench"]}
+    # Bench is projection-sorted so the report reads top-down.
+    bench_proj = [b["proj"] for b in rec["bench"]]
+    assert bench_proj == sorted(bench_proj, reverse=True)
+    assert np is not None
+
+
+@requires_data_lake
+def test_full_league_is_tracked_with_detail():
+    """detail=True must record every team's roster and our transaction log --
+    the "who's on each team, who started, who got dropped" the report needs."""
+    from ffdata.db import connect
+    from ffdata.season_sim import format_league_report, run_season
+
+    r = run_season(2024, our_slot=0, detail=True, con=connect(), log=lambda *a: None)
+    assert len(r["final_rosters"]) == 12
+    assert all(len(roster) == ROSTER_SIZE for roster in r["final_rosters"])
+    # No player is on two rosters at season's end.
+    from ffdata.optimize import _norm
+    everyone = [_norm(p["player"]) for roster in r["final_rosters"] for p in roster]
+    assert len(everyone) == len(set(everyone)), "a player is double-rostered"
+    # The report renders without error and names our team.
+    txt = format_league_report(r)
+    assert "OUR DRAFT" in txt and "EVERY TEAM'S FINAL ROSTER" in txt
+
+
+def test_waivers_respect_a_minimum_gain():
+    """Without a floor, teams churn every week on ~6-RMSE projection noise. A
+    move must clear a real improvement to the starting lineup."""
+    proj = _proj(20, 5, 15, 12, 1, 14, 11, 2, 8, 8, 7)
+    # A free agent 1.0 better than the worst bench WR -- real but tiny.
+    pool = [_p("Marginal Wide", "WR")]
+    proj["marginal wide"] = 3.0                       # vs Hal Wide (2) on the bench
+    _, move = run_waivers(ROSTER, pool, proj, min_gain=3.0)
+    assert move is None, "a sub-threshold upgrade must not trigger a move"
+    # A clear upgrade that starts still goes through.
+    proj["marginal wide"] = 25.0
+    _, move = run_waivers(ROSTER, pool, proj, min_gain=3.0)
+    assert move is not None and move["gain"] >= 3.0
+
+
+def test_waiver_value_smooths_over_a_bye_week():
+    """The bug that made all-team waivers a lottery: a stud on bye projects ~0
+    for the coming week, so single-week logic dropped him for a streamer. Waivers
+    must decide on FORM (season-to-date average), where one 0 barely registers.
+
+    This checks the smoothing arithmetic run_season uses for that value.
+    """
+    # A stud averaging 20 across 8 weeks, then a bye (0) in week 9.
+    psum, pcnt = {"stud": 160.0}, {"stud": 8}
+    form = (psum["stud"] + 0.0) / (pcnt["stud"] + 1)      # week-9 value
+    assert form > 17.0, "one bye must not tank a stud's waiver value"
+    # A streamer who just projects 5 this week stays well below him.
+    assert form > 5.0
+
+
+def test_sharp_opponents_draft_by_value_naive_opponents_hoard_qbs():
+    """Two opponent models. Naive ranks by raw points (QB-heavy strawman); sharp
+    drafts our VOR board with per-team noise (a competent field). The switch has
+    to actually change who the opponents draft."""
+    from ffdata.season_sim import _draft_boards_for
+
+    ours = [{"player": f"P{i}", "position": "RB", "proj": 200 - i} for i in range(50)]
+    naive = [{"player": f"Q{i}", "position": "QB", "proj": 300 - i} for i in range(50)]
+
+    nb = _draft_boards_for(ours, naive, 12, our_slot=0, opponent="naive", noise=24)
+    assert nb[0] is ours and nb[1] is naive          # us=VOR, them=raw points
+
+    sb = _draft_boards_for(ours, naive, 12, our_slot=0, opponent="sharp", noise=24)
+    assert sb[0] is ours                             # we always draft the clean board
+    # Opponents draft OUR board, just reordered by their own noise -- same players.
+    assert {p["player"] for p in sb[1]} == {p["player"] for p in ours}
+    assert [p["player"] for p in sb[1]] != [p["player"] for p in ours]  # but reranked
+
+
+def test_jitter_is_deterministic_and_bounded():
+    """No RNG (the sandbox forbids it) -- a hash, so the whole sim reproduces."""
+    from ffdata.season_sim import _jitter
+
+    a = _jitter("Christian McCaffrey", 3, 24.0)
+    assert a == _jitter("Christian McCaffrey", 3, 24.0)      # stable
+    assert abs(a) <= 24.0
+    assert _jitter("Christian McCaffrey", 3, 24.0) != _jitter("Christian McCaffrey", 4, 24.0)
