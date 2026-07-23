@@ -380,3 +380,18 @@ def test_rookie_prior_seeds_only_players_never_projected():
     # The real weekly number always wins over the prior.
     wk = _seed_rookie_prior({"rookierb": 3.0}, prior, set())
     assert wk["rookierb"] == 3.0
+
+
+def test_injured_players_are_dropped_byes_are_kept():
+    """A one-week absence is a bye (keep him); two-plus straight weeks is hurt/IR
+    (drop him for a live body). A pre-debut rookie -- never projected -- is not
+    injured, just not playing yet."""
+    from ffdata.season_sim import INJURY_ABSENCE, _is_injured
+
+    ever = {"vetrb"}
+    assert _is_injured("vetrb", ever, {"vetrb": 1}) is False       # one week = bye
+    assert _is_injured("vetrb", ever, {"vetrb": INJURY_ABSENCE}) is True  # 2+ = hurt
+    # A rookie who has never been projected is exempt even if "absent".
+    assert _is_injured("rookiewr", ever, {"rookiewr": 5}) is False
+    # A healthy player (streak 0) is never injured.
+    assert _is_injured("vetrb", ever, {}) is False

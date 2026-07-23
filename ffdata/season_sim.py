@@ -61,6 +61,10 @@ LIMITS = {"QB": 2, "RB": 4, "WR": 4, "TE": 2, "DEF": 1, "K": 1}
 REG_WEEKS = tuple(range(1, 15))              # weeks 1-14
 PLAYOFF_WEEKS = (15, 16, 17)                 # 6-team bracket, top 2 get a bye
 NFL_GAMES = 17                               # to prorate a season projection -> a week
+# Weeks a rostered player can be absent from projections before he's treated as
+# hurt/IR rather than on a bye. One missing week is a bye -- you ride it out; two
+# or more means injured, and a real manager drops him for a live body.
+INJURY_ABSENCE = 2
 # Smallest projected-points upgrade to a starting slot worth a waiver move. Real
 # managers have inertia; without this every team churns weekly on ~6-RMSE noise,
 # which (via bye weeks) circulates studs around the league and turns the whole
@@ -92,6 +96,18 @@ def _seed_rookie_prior(wk_proj: dict, prior_wk: dict, ever_projected: set) -> di
         if k not in proj and k not in ever_projected:
             proj[k] = v
     return proj
+
+
+def _is_injured(key: str, ever_projected: set, absent_streak: dict) -> bool:
+    """Is a rostered player hurt/IR (drop him) versus on a one-week bye (keep him)?
+
+    A player the model has projected before, now absent from projections for
+    INJURY_ABSENCE+ straight weeks, is injured -- a real manager drops him for a
+    live body. A single missing week is a bye (ride it out). A player never yet
+    projected is a pre-debut rookie, not hurt, so he's exempt.
+    """
+    return (key in ever_projected
+            and absent_streak.get(key, 0) >= INJURY_ABSENCE)
 
 
 def _beats(scores, bench, a, b, week) -> bool:
@@ -477,6 +493,9 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     # preseason prior (that would start bye-week players and tank scores). The
     # prior fallback is only for players who have never been seen: rookies/debuts.
     ever_projected: set[str] = set()
+    # Consecutive weeks each rostered player has had no game. 1 = bye (keep him),
+    # >= INJURY_ABSENCE = hurt/IR (waivers drop him for a live body).
+    absent_streak: dict[str, int] = {}
 
     def value_of(key: str, this_week: float) -> float:
         """Season-to-date average projection, seeded by this week's number."""
@@ -494,6 +513,13 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
         wk_proj, _ = project(w)
         proj = _seed_rookie_prior(wk_proj, prior_wk, ever_projected)
         ever_projected.update(wk_proj)
+        # A rostered player with no game this week is on a bye or hurt. Count the
+        # streak so waivers can tell one-week byes (ride out) from injuries (drop).
+        active = set(wk_proj)
+        for r in rosters:
+            for p in r:
+                k = _norm(p["player"])
+                absent_streak[k] = 0 if k in active else absent_streak.get(k, 0) + 1
         actual_w = by_week[w]
         for k, v in proj.items():           # fold this week into each player's form
             psum[k] = psum.get(k, 0.0) + v
@@ -519,9 +545,16 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
         if waivers and wi + 1 < len(weeks):
             nxt, nxt_pool = project(weeks[wi + 1])
             # Value every roster/pool player by his form, not the single upcoming
-            # week -- and only over players actually available or rostered.
-            wval = {k: value_of(k, nxt.get(k, 0.0))
-                    for k in set(nxt) | taken}
+            # week -- and only over players actually available or rostered. A
+            # player gone 2+ weeks is hurt/IR: zero his value so a real manager
+            # drops him for a live body (a one-week bye keeps his form). Pre-debut
+            # rookies (never projected) are exempt -- they haven't been hurt.
+            wval = {}
+            for k in set(nxt) | taken:
+                if _is_injured(k, ever_projected, absent_streak):
+                    wval[k] = 0.0
+                else:
+                    wval[k] = value_of(k, nxt.get(k, 0.0))
             # Only the best free agents matter: run_waivers requires a starting-
             # lineup upgrade, so a replacement-level FA is never added. Keeping the
             # top few per position by form is realistic (no one rosters the 100th
