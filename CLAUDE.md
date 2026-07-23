@@ -170,7 +170,12 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   season's label. `ingest.season_not_started()` is the single predicate; the web
   returns `{ok: false, not_started: true}` and the weekly CLIs exit with the same
   sentence. The ingest CLI still pulls `FIRST_SEASON..current` — that's the
-  backend lake, and it's the one place `current` belongs.
+  backend lake, and it's the one place `current` belongs. **The predicate is
+  games-based, not calendar-based:** given a lake `con` it checks whether `weekly`
+  actually has the season's rows, which is correct in the ~week between the Sept-1
+  label rollover and real Week-1 kickoff (the month rule called that "started" and
+  the weekly path then crashed on an empty frame); it falls back to the calendar
+  only when there's no lake to consult (a pre-ingest CLI message).
 - `weekly` keeps skill positions **plus K** — `kdst.build_kicker` reads kickers
   out of it, so filtering them at ingest silently kills kicker projections.
   Team defense comes from `schedules`, not `weekly`.
@@ -253,7 +258,10 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   - Kept for **every position**, not just skill: a suspended tackle feeds
     `line_context`. Refresh with `python -m ffdata.cli --live` (12h TTL; Sleeper
     asks for ≤1 call/day). The board reads the cached view and never fetches, so
-    it stays fast and works offline.
+    it stays fast and works offline. The web's context cache keys on the
+    `sleeper_status.parquet` **mtime**, so a refresh is picked up on the next
+    request — a plain per-season cache would freeze the "live" feed until the
+    server restarted.
   - Complementary, not a replacement: nflverse tells you how last season *ended*,
     Sleeper what's true *now*. De'Von Achane reads "ruled out wk 18, shoulder" from
     one and "questionable — Shoulder — Surgery, reported 2026-07-19" from the other.
@@ -274,6 +282,9 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   (t = −3.84, 95% CI [−5.8, −1.9]), and it replicates in both halves of the era
   (−3.3 in 2019–21, −4.4 in 2022–24). A plain correlation reads **−0.03** and
   would have thrown it away — the relationship is a threshold, not a gradient.
+  That threshold is **enforced, not just documented**: `line_context` drops any
+  team below `_OL_THRESHOLD` (2) starters out, so the board never flags a single
+  injury the data says is noise.
   Rides on **RB rows only**: QBs showed nothing (−0.40 at two down). Preseason
   caveat: in July it's driven by linemen who ended last season hurt (2026: 11
   teams have one, only NYG has two), so it earns its keep in-season.
@@ -286,7 +297,13 @@ python -m ffdata.web                                # http://127.0.0.1:8000
     halves of the era** (−1.2 in 2019–21, +6.8 in 2022–24). Not a finding.
   Depth charts changed format mid-stream: 2019–24 are weekly rows on
   `depth_position`/`depth_team`/`club_code`, 2025+ are dated snapshots on
-  `pos_abb`/`pos_rank`/`team`. Any multi-season depth query must read both.
+  `pos_abb`/`pos_rank`/`team`. Any multi-season depth query must read both. The
+  snapshot files stack many dates; `_normalize_depth_charts` keeps the latest
+  **per team** (not one global `max(dt)`, which would drop every team whose chart
+  was refreshed on an earlier date). `ended_hurt` takes a team's final week from
+  `schedules` (how far it actually went), not from the last injury-report week;
+  and `new_coach` anchors on the coach a team **ended** the season with (last
+  game, week-desc), so a mid-season firing labels the change correctly.
 - **No player is ever typed.** Every spot that used to take a name — keepers,
   both trade sides, compare, waiver exclusions, prop lines — is a search picker
   over the list we already have (`picker()` in `index.html`, one component, two

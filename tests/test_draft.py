@@ -220,10 +220,59 @@ def test_line_context_counts_only_unavailable_starters():
     assert "KC" not in lc.index                             # nobody down -> no row
 
 
+def test_line_context_needs_two_out_to_flag_the_line():
+    """The measured finding is a threshold: one lineman down is noise, only 2+
+    costs the backfield. A single injury must NOT surface a flag."""
+    con = _line_con(
+        ol_rows=[("DAL", "d1"), ("DAL", "d2"), ("DAL", "d3"),   # 3 starters, 1 down
+                 ("NYG", "n1"), ("NYG", "n2")],                  # 2 starters, 2 down
+        avail_rows=[("d1", "RES", "One Down"), ("d2", "ACT", "Healthy A"),
+                    ("d3", "ACT", "Healthy B"),
+                    ("n1", "RES", "Two Down A"), ("n2", "PUP", "Two Down B")])
+    lc = line_context(2026, con=con).set_index("team")
+    assert "DAL" not in lc.index                 # only one out -> below threshold
+    assert lc.loc["NYG", "ol_out"] == 2          # two out -> flagged
+
+
 def test_line_context_survives_a_lake_without_depth_charts():
     import duckdb
     empty = line_context(2026, con=duckdb.connect())
     assert empty.empty and {"team", "ol_out"}.issubset(empty.columns)
+
+
+def test_team_last_week_reads_schedule_length_not_injury_reports():
+    """`ended_hurt` measures against how far a team went; that must come from the
+    real schedule, not from whenever someone last filed an injury report."""
+    import duckdb
+
+    from ffdata.draft import _team_last_week
+    con = duckdb.connect()
+    con.register("schedules", pd.DataFrame(
+        [(2025, "KC", "BUF", 22, 30, 25),      # reached the Super Bowl (wk 22)
+         (2025, "NYJ", "MIA", 18, 10, 20),     # missed the playoffs (wk 18)
+         (2025, "KC", "DEN", 25, None, None)],  # an unplayed row must not count
+        columns=["season", "home_team", "away_team", "week", "home_score", "away_score"]))
+    lw = _team_last_week(con, 2025)
+    assert lw["KC"] == 22 and lw["BUF"] == 22    # both teams in the SB game
+    assert lw["NYJ"] == 18 and lw["MIA"] == 18
+
+
+def test_team_coach_takes_the_coach_the_team_ended_with():
+    """A mid-season firing gives a team two coaches; `new_coach` should anchor on
+    who they ENDED with, not the alphabetically-first (the old min() bug)."""
+    import duckdb
+
+    from ffdata.draft import _team_coach
+    con = duckdb.connect()
+    con.register("schedules", pd.DataFrame(
+        # ATL fired their week-1 coach; "Zzz Interim" finished the year.
+        [(2025, "ATL", 1, "Arthur Smith", "REG"),
+         (2025, "ATL", 17, "Zzz Interim", "REG"),
+         (2025, "GB", 5, "Matt LaFleur", "REG")],
+        columns=["season", "home_team", "week", "home_coach", "game_type"]))
+    coaches = _team_coach(con).set_index("team")["coach"]
+    assert coaches["ATL"] == "Zzz Interim"       # last game, not min() -> "Arthur"
+    assert coaches["GB"] == "Matt LaFleur"
 
 
 @requires_data_lake

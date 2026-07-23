@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -147,14 +146,25 @@ def config():
             "started": season <= current_nfl_season(), "advice": advice.available()}
 
 
+def _con():
+    """A lake connection, or None when nothing is ingested yet (callers degrade)."""
+    try:
+        from .db import connect
+        return connect()
+    except Exception:  # noqa: BLE001 - no data/ dir -> no connection
+        return None
+
+
 def _not_started(season: int) -> dict | None:
     """The honest answer for weekly tools before Week 1 exists.
 
     `weekly`/`injuries`/`snap_counts` only exist for seasons that have been
     PLAYED, so in the offseason there is nothing to project. Say that plainly
     rather than silently serving last season's numbers under this season's label.
+    Backed by the data (does `weekly` actually have this season's games?) so the
+    Sept-1-to-kickoff window doesn't slip through and crash on an empty frame.
     """
-    if not season_not_started(season):
+    if not season_not_started(season, con=_con()):
         return None
     return {"ok": False, "not_started": True,
             "error": f"The {season} season hasn't kicked off yet. {NOT_STARTED_HINT}"}
@@ -392,16 +402,37 @@ def api_draft(req: DraftRequest):
     return {"ok": True, "count": len(players), "total": len(board), "players": players}
 
 
-@lru_cache(maxsize=8)
+_CTX: dict = {}
+
+
+def _live_mtime() -> float:
+    """Modification time of the cached Sleeper live-status feed (0 if absent).
+
+    The situation context folds in TODAY's IR/injury status from Sleeper; caching
+    it only by season would freeze that "live" feed for the life of the process,
+    so `python -m ffdata.cli --live` would have no effect until a restart. Keying
+    the cache on this mtime means a refresh (which rewrites the parquet) is picked
+    up on the next request, while an unchanged feed still serves from cache.
+    """
+    try:
+        from .db import RAW
+        return (RAW / "sleeper_status" / "sleeper_status.parquet").stat().st_mtime
+    except Exception:  # noqa: BLE001 - no feed yet -> a stable key, still cacheable
+        return 0.0
+
+
 def _player_ctx(season: int) -> dict:
     """player_id -> situation context (room, scheme, move) for every player."""
+    key = ("player", season, _live_mtime())
+    if key in _CTX:
+        return _CTX[key]
     try:
         c = player_context(season)
     except Exception:  # noqa: BLE001 - context is a bonus, never fatal
         _log.exception("player context failed (%s)", season)
-        return {}
+        return _cache_put(_CTX, key, {})
     if c is None or c.empty:
-        return {}
+        return _cache_put(_CTX, key, {})
     out = {}
     for _, r in c.iterrows():
         out[r["player_id"]] = {
@@ -434,24 +465,28 @@ def _player_ctx(season: int) -> dict:
         }
         if inj["injury"] or inj["status"] or inj["live"]:
             out[r["player_id"]]["inj"] = inj
-        # Only on RBs, and only when someone's actually down -- see line_context.
+        # Only on RBs, and only when the line is compromised past the measured
+        # threshold -- line_context already drops sub-threshold teams, so any
+        # ol_out that survives to here is a real (2+) flag.
         if int(r["ol_out"] or 0):
             out[r["player_id"]]["line"] = {
                 "out": int(r["ol_out"]),
                 "who": (None if pd.isna(r["ol_names"]) else str(r["ol_names"])),
             }
-    return out
+    return _cache_put(_CTX, key, out)
 
 
-@lru_cache(maxsize=8)
 def _rookie_ctx(season: int) -> dict:
     """player -> opportunity context (vacated, who blocks him, depth, pass rate)."""
+    key = ("rookie", season, _live_mtime())
+    if key in _CTX:
+        return _CTX[key]
     try:
         c = rookie_context(season)
     except Exception:  # noqa: BLE001 - context is a bonus, never fatal
-        return {}
+        return _cache_put(_CTX, key, {})
     if c is None or c.empty:
-        return {}
+        return _cache_put(_CTX, key, {})
     out = {}
     for _, r in c.iterrows():
         out[r["player"]] = {
@@ -463,7 +498,7 @@ def _rookie_ctx(season: int) -> dict:
             "depth": (None if pd.isna(r["depth_rank"]) else int(r["depth_rank"])),
             "pass_rate": (None if pd.isna(r["pass_rate"]) else float(r["pass_rate"])),
         }
-    return out
+    return _cache_put(_CTX, key, out)
 
 
 def _keeper_pairs(keepers: list) -> list[tuple[str, float]]:

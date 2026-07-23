@@ -439,6 +439,12 @@ def _draft_why(drafted, season, rules, con, our_slot, n_teams):
     available that fits an open slot -- so VOR *is* the reason, and the situational
     context (rookie draft capital, a vacated role, a team change) is the colour.
     Returns one dict per pick, in draft order.
+
+    NOTE: this is report colour ONLY -- it never touches the picks or the scores,
+    which come from the leak-free VOR board. In a historical replay the injury/
+    availability half of `player_context` reads the target season's own reports,
+    so a "why" line can carry a little hindsight the drafter wouldn't have had.
+    That's cosmetic; the measured finish and title rate are unaffected.
     """
     from .draft import player_context, rookie_context
     try:

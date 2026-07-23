@@ -66,6 +66,41 @@ def test_season_floor_and_rollover():
     assert current_nfl_season(dt.date(2025, 9, 1)) == 2025
 
 
+def test_depth_charts_keep_latest_snapshot_per_team():
+    """A single global max(dt) would drop every team whose latest chart predates
+    another team's; keeping the latest PER TEAM preserves them all."""
+    import pandas as pd
+
+    from ffdata.ingest import _normalize_depth_charts
+    df = pd.DataFrame({
+        "team": ["BUF", "BUF", "KC", "KC"],
+        "dt": ["2026-08-01", "2026-08-20", "2026-08-25", "2026-08-10"],
+        "player": ["buf_old", "buf_new", "kc_new", "kc_old"],
+    })
+    out = _normalize_depth_charts(df, season=2026)
+    assert set(zip(out["team"], out["player"])) == {("BUF", "buf_new"), ("KC", "kc_new")}
+    assert (out["season"] == 2026).all()
+
+
+def test_season_not_started_prefers_played_games_over_the_calendar():
+    """The month-based rule wrongly calls a season 'started' in the ~week between
+    the Sept 1 label rollover and real Week 1 kickoff. The data settles it."""
+    import datetime as dt
+
+    import duckdb
+
+    from ffdata.ingest import season_not_started
+    con = duckdb.connect()
+    con.execute("create table weekly (season int, season_type varchar)")
+    con.execute("insert into weekly values (2025, 'REG'), (2025, 'REG')")
+
+    early_sept = dt.date(2026, 9, 3)          # after label rollover, before kickoff
+    assert season_not_started(2025, early_sept, con=con) is False   # has games
+    assert season_not_started(2026, early_sept, con=con) is True    # none yet
+    # No connection -> the calendar heuristic still answers (pre-ingest CLI).
+    assert season_not_started(2027, dt.date(2026, 7, 1)) is True
+
+
 def test_upcoming_season_is_what_you_draft_for():
     """In the offseason `current` is the season already finished -- drafting
     against it would rank players for a season that's over."""

@@ -26,6 +26,8 @@ skips them (they need a draft-capital model).
 
 from __future__ import annotations
 
+import logging
+
 import duckdb
 import numpy as np
 import pandas as pd
@@ -35,6 +37,8 @@ from .db import connect
 from .gbm import gbm_params
 from .scoring import HALF_PPR, PPR, STANDARD, ScoringRules, score
 from .sleeper import LIVE_SEVERE, norm_name
+
+_log = logging.getLogger("ffdata.draft")
 
 POSITIONS = ("QB", "RB", "WR", "TE")
 # draft_picks ships PFR team codes; everything else in the lake uses nflverse's.
@@ -111,12 +115,20 @@ def _team_season(con) -> pd.DataFrame:
 
 
 def _team_coach(con) -> pd.DataFrame:
-    """Head coach per team per season, derived from the schedule (for coach-change)."""
+    """Head coach per team per season, derived from the schedule (for coach-change).
+
+    The coach of the team's LAST regular-season game -- not `min()`/`any_value()`.
+    A mid-season firing leaves a team with two coaches for the year; who they
+    ENDED with is the one they carry into the offseason, so it's the right anchor
+    for `new_coach`. Ordering by week desc is also deterministic (one home game
+    per week), which `any_value()` was not (it flipped run to run and made the
+    board irreproducible)."""
     return con.sql("""
-        -- min(), not any_value(): a mid-season coaching change gives a team two
-        -- coaches, and any_value() picks a different one run to run.
-        select season, home_team as team, min(home_coach) as coach
-        from schedules where game_type = 'REG' group by season, home_team
+        select season, team, coach from (
+            select season, home_team as team, home_coach as coach,
+                   row_number() over (partition by season, home_team order by week desc) rn
+            from schedules where game_type = 'REG' and home_coach is not null)
+        where rn = 1
     """).df()
 
 
@@ -249,6 +261,16 @@ def _draft_capital(con) -> pd.DataFrame | None:
     # nflverse has renamed the name column across versions; take what's present.
     name_col = next((c for c in ("pfr_player_name", "full_name", "player_name", "player")
                      if c in df.columns), None)
+    # draft_picks uses PFR team codes (GNB/KAN/LVR); the rest of the lake uses
+    # nflverse ones (GB/KC/LV). Unmapped, 8 teams silently lose context -- and if
+    # the column is missing entirely, EVERY rookie's team goes blank and the
+    # situation join matches nothing, so say so rather than failing silently.
+    if "team" in df.columns:
+        team = df["team"].map(lambda t: _PFR_TEAM.get(t, t))
+    else:
+        _log.warning("draft_picks has no 'team' column; rookie situation context "
+                     "(vacated/returning/blocked_by) will be blank")
+        team = pd.Series(index=df.index, dtype=object)
     out = pd.DataFrame({
         "player_id": df["gsis_id"],
         "draft_season": pd.to_numeric(df["season"], errors="coerce"),
@@ -256,9 +278,7 @@ def _draft_capital(con) -> pd.DataFrame | None:
         "pick": pd.to_numeric(df.get("pick"), errors="coerce"),
         "position": df.get("position"),
         "player": df[name_col] if name_col else df["gsis_id"],
-        # draft_picks uses PFR team codes (GNB/KAN/LVR); the rest of the lake
-        # uses nflverse ones (GB/KC/LV). Unmapped, 8 teams silently lose context.
-        "team": df.get("team", pd.Series(index=df.index, dtype=object)).replace(_PFR_TEAM),
+        "team": team,
     }).dropna(subset=["player_id", "draft_season", "pick"])
     return out[out["position"].isin(POSITIONS)].reset_index(drop=True)
 
@@ -290,6 +310,18 @@ def rookie_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     prior = (agg[agg["season"] == target_season - 1][["player_id", "position", "fp"]]
              .merge(ts[ts["season"] == target_season - 1][["player_id", "team"]], on="player_id"))
     now = ts[ts["season"] == target_season][["player_id", "team"]].rename(columns={"team": "team_now"})
+    if now.empty:
+        # Target-season rosters aren't ingested, so we can't tell who stayed from
+        # who left -- vacated/returning would be fiction (every prior player would
+        # count as gone). Report them unknown rather than inflated, keeping the
+        # signals that don't need the new roster (depth chart, scheme).
+        out = rooks.assign(vacated_fp=np.nan, returning_fp=np.nan,
+                           blocked_by=np.nan, blocked_by_fp=np.nan)
+        out["depth_rank"] = out["player_id"].map(_depth_rank(con, target_season))
+        out = out.merge(_team_pass_rate(con, target_season - 1), on="team", how="left")
+        cols = ["player", "position", "team", "pick", "vacated_fp", "returning_fp",
+                "blocked_by", "blocked_by_fp", "depth_rank", "pass_rate"]
+        return out[cols].sort_values("pick").reset_index(drop=True)
     prior = prior.merge(now, on="player_id", how="left")
     prior["stays"] = prior["team_now"] == prior["team"]
     ctx = (prior.assign(gone=np.where(prior["stays"], 0.0, prior["fp"]),
@@ -660,6 +692,23 @@ def _live_status(con, season: int) -> pd.DataFrame:
     return both.drop_duplicates("player_id", keep="first")[cols]
 
 
+def _team_last_week(con, season: int) -> pd.Series:
+    """Each team's final PLAYED week in `season` (regular season + playoffs), from
+    the schedule -- the ground truth for how far a team went. Indexed by team."""
+    try:
+        df = con.sql(
+            "select team, max(week) as last_week from ("
+            "  select home_team as team, week from schedules "
+            "    where season = ? and home_score is not null "
+            "  union all "
+            "  select away_team as team, week from schedules "
+            "    where season = ? and home_score is not null) group by team",
+            params=[season, season]).df()
+    except Exception:  # noqa: BLE001 - no schedules view -> caller falls back
+        return pd.Series(dtype="float64")
+    return df.set_index("team")["last_week"]
+
+
 def availability_context(target_season: int, con=None) -> pd.DataFrame:
     """How last season ENDED for each player, plus how he sits right now.
 
@@ -708,8 +757,13 @@ def availability_context(target_season: int, con=None) -> pd.DataFrame:
         # playoffs, 22 if it reached the Super Bowl), so "ended the season hurt"
         # only means anything measured against that team's OWN finish -- not the
         # player's last report, which would be trivially true for everyone.
-        team_last = inj.groupby("team")["week"].max()
-        season_last = inj["week"].max()
+        # Take that finish from the SCHEDULE (ground truth), not from the last
+        # week anyone on the team happened to file an injury report -- a deep team
+        # with no final-week report would otherwise be given too short a season.
+        team_last = _team_last_week(con, prior)
+        if team_last.empty:                      # no schedule -> fall back to reports
+            team_last = inj.groupby("team")["week"].max()
+        season_last = int(team_last.max()) if len(team_last) else inj["week"].max()
         if not hurt.empty:
             last = hurt.sort_values("week").groupby("player_id").tail(1)
             out = last[["player_id", "team", "week", "game_type", "report_primary_injury"]].rename(
@@ -746,7 +800,7 @@ def availability_context(target_season: int, con=None) -> pd.DataFrame:
                                "live_code", "live_body", "live_note", "news_date"])
     for c in ("weeks_out", "last_week"):
         out[c] = out[c].astype("Float64")
-    out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
+    out["ended_hurt"] = out["ended_hurt"].astype("boolean").fillna(False).astype(bool)
     return out.reset_index(drop=True)
 
 
@@ -812,7 +866,7 @@ def line_context(target_season: int, con=None) -> pd.DataFrame:
         return pd.DataFrame(columns=["team", "ol_out", "ol_names"])
 
     avail = availability_context(target_season, con).set_index("player_id")
-    hurt = ol["gsis_id"].map(avail["ended_hurt"]).fillna(False)
+    hurt = ol["gsis_id"].map(avail["ended_hurt"]).astype("boolean").fillna(False).astype(bool)
     gone = ol["gsis_id"].map(avail["status"]).notna()
     # A lineman on IR/PUP/suspended TODAY counts; merely Questionable does not
     # (most Questionable players start, and one man down measured as no effect
@@ -826,9 +880,14 @@ def line_context(target_season: int, con=None) -> pd.DataFrame:
         "select distinct gsis_id, min(full_name) as nm from rosters "
         "where season = ? group by gsis_id", params=[target_season]).df()
     ol = ol.merge(names, on="gsis_id", how="left")
-    return (ol.groupby("team", as_index=False)
-              .agg(ol_out=("gsis_id", "size"),
-                   ol_names=("nm", lambda s: ", ".join(sorted(x for x in s if isinstance(x, str))))))
+    by_team = (ol.groupby("team", as_index=False)
+               .agg(ol_out=("gsis_id", "size"),
+                    ol_names=("nm", lambda s: ", ".join(sorted(x for x in s if isinstance(x, str))))))
+    # The measured finding is a THRESHOLD: one lineman down is noise (+0.03 vs the
+    # team's usual), only two or more costs the backfield (~3.8 PPR pts/game). So a
+    # compromised line means `_OL_THRESHOLD`+ out -- surfacing a single injury
+    # would flag something the data says is nothing.
+    return by_team[by_team["ol_out"] >= _OL_THRESHOLD].reset_index(drop=True)
 
 
 def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
@@ -898,10 +957,10 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     cc = cur_c.merge(old_c, on="team", how="left")
     cc["new_coach"] = cc["coach"].ne(cc["coach_prev"]) & cc["coach_prev"].notna()
     out = out.merge(cc[["team", "new_coach"]], on="team", how="left")
-    out["new_coach"] = out["new_coach"].fillna(False)
+    out["new_coach"] = out["new_coach"].astype("boolean").fillna(False).astype(bool)
 
     out = out.merge(availability_context(target_season, con), on="player_id", how="left")
-    out["ended_hurt"] = out["ended_hurt"].fillna(False).astype(bool)
+    out["ended_hurt"] = out["ended_hurt"].astype("boolean").fillna(False).astype(bool)
 
     # The line only measured for the backfield (RBs lose ~3.8 pts/game once two
     # starters are down; QBs showed nothing), so it rides only on RB rows rather

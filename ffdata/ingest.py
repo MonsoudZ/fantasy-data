@@ -50,12 +50,20 @@ def _normalize_depth_charts(df: pd.DataFrame, season: int | None = None) -> pd.D
     """Depth charts changed format mid-stream: older files are season/week rows,
     newer ones are dated LIVE snapshots with no season column and many snapshots
     stacked together. Stamp the season we asked for, and for snapshot files keep
-    only the most recent chart (the current depth order)."""
+    each team's most recent chart (the current depth order).
+
+    The latest snapshot is taken PER TEAM, not globally: teams update their charts
+    on different dates, so a single global `max(dt)` would silently drop every
+    team whose latest update predates some other team's -- losing their depth
+    ranks entirely. Grouping by team keeps each one's freshest chart.
+    """
     df = df.copy()
     if season is not None and ("season" not in df.columns or df["season"].isna().all()):
         df["season"] = season
     if "dt" in df.columns and df["dt"].notna().any():
-        df = df[df["dt"] == df["dt"].max()].reset_index(drop=True)
+        team_col = next((c for c in ("team", "club_code", "recent_team") if c in df.columns), None)
+        latest = df.groupby(team_col)["dt"].transform("max") if team_col else df["dt"].max()
+        df = df[df["dt"] == latest].reset_index(drop=True)
     return df
 
 
@@ -82,14 +90,29 @@ def upcoming_nfl_season(today: dt.date | None = None) -> int:
     return cur if today.month >= 9 else cur + 1
 
 
-def season_not_started(season: int, today: dt.date | None = None) -> bool:
+def season_not_started(season: int, today: dt.date | None = None, con=None) -> bool:
     """True when `season` has no played games yet.
 
     `weekly`, `injuries` and `snap_counts` only exist for seasons that have been
     PLAYED, so every weekly tool is dark until Week 1 is in the books. Callers use
     this to say so plainly instead of failing on an empty frame -- or, worse,
     quietly serving last season's numbers under this season's label.
+
+    Ground truth is the data: if a lake connection is given, the season has
+    started iff `weekly` actually has regular-season rows for it. That is correct
+    across the whole calendar -- in particular the ~week between the Sept 1 label
+    rollover and real Week 1 kickoff, where the month-based heuristic wrongly
+    calls the season "started" and the weekly path then dies on an empty frame.
+    Falls back to the calendar (Week 1 lands in September) only when there is no
+    lake to consult -- e.g. a CLI message before anything is ingested.
     """
+    if con is not None:
+        try:
+            hit = con.sql("select 1 from weekly where season = ? and season_type = 'REG' limit 1",
+                          params=[season]).df()
+            return len(hit) == 0
+        except Exception:  # noqa: BLE001 - no weekly view yet -> fall back to the calendar
+            pass
     return season > current_nfl_season(today)
 
 
