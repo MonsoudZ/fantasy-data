@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import advice
 from .draft import (DEFAULT_LEAGUE, availability_penalty, best_available, board_upside,
-                    career_year_context, competition_context, draft_board, keeper_value,
-                    player_context, rookie_context, schedule_context, trade_value)
+                    career_year_context, competition_context, consensus_context, draft_board,
+                    keeper_value, player_context, rookie_context, schedule_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -364,6 +364,8 @@ def _get_board(req: BoardRequest):
             # Career-year regression risk for RBs -- context only (the projection
             # already regresses it); names the Barkley-2025 dip for the human.
             board = career_year_context(board, req.season)
+            # Consensus ADP + where we disagree with it -- context, not in VOR.
+            board = consensus_context(board)
         except Exception:  # noqa: BLE001 - decision-support extras, never fatal
             _log.exception("board enrichment failed (%s)", req.season)
         _cache_put(_DRAFT, key, board)
@@ -415,7 +417,7 @@ def api_draft(req: DraftRequest):
     if err:
         return err
     avail = best_available(board, req.drafted, req.position or None, req.n)
-    rk, ctx = _rookie_ctx(req.season), _player_ctx(req.season)
+    rk, ctx = _rookie_ctx(req.season), _player_ctx(req.season, ranked=board)
     players = []
     for _, r in avail.iterrows():
         row = {"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
@@ -443,6 +445,10 @@ def api_draft(req: DraftRequest):
         if bool(r.get("career_year", False)):
             row["career_year"] = True
             row["prior_touches"] = int(r["prior_touches"]) if pd.notna(r.get("prior_touches")) else None
+        # Consensus ADP + our disagreement with it (context, not in VOR).
+        if "adp" in r and pd.notna(r.get("adp")):
+            row["adp"] = int(r["adp"])
+            row["adp_delta"] = int(r["adp_delta"]) if pd.notna(r.get("adp_delta")) else None
         # Every player carries the situation the projection can't see -- who's
         # ahead of him, what left the room, the scheme. Rookies additionally
         # carry draft capital, which is all their projection is built on.
@@ -474,13 +480,20 @@ def _live_mtime() -> float:
         return 0.0
 
 
-def _player_ctx(season: int) -> dict:
-    """player_id -> situation context (room, scheme, move) for every player."""
-    key = ("player", season, _live_mtime())
+def _player_ctx(season: int, ranked=None) -> dict:
+    """player_id -> situation context (room, scheme, move) for every player.
+
+    `ranked` is the draft board -- passed through so `blocked_by` ranks each room
+    by our forward projection (which knows the rookie starter), not last year's
+    points. Keyed on the board's top order so a different scoring gets its own ctx.
+    """
+    sig = (tuple(ranked.sort_values("proj", ascending=False)["player_id"].head(40))
+           if ranked is not None and not ranked.empty else None)
+    key = ("player", season, _live_mtime(), sig)
     if key in _CTX:
         return _CTX[key]
     try:
-        c = player_context(season)
+        c = player_context(season, ranked=ranked)
     except Exception:  # noqa: BLE001 - context is a bonus, never fatal
         _log.exception("player context failed (%s)", season)
         return _cache_put(_CTX, key, {})

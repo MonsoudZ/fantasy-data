@@ -708,3 +708,84 @@ def test_career_year_context_flags_workhorses_not_rookies_and_leaves_vor_alone()
     j = board[["player_id", "vor"]].merge(
         tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
     assert (j["vor_a"] == j["vor_b"]).all()
+
+
+@requires_data_lake
+def test_player_context_ranks_the_room_by_who_is_actually_ahead_not_last_year():
+    """blocked_by must follow who's AHEAD this year -- consensus ADP when a feed is
+    loaded, else our forward projection -- not last season's points. The invariant:
+    no one is blocked by a teammate the active signal ranks BELOW him, and a
+    projected/ADP room leader is never shown as blocked."""
+    from ffdata.draft import _consensus_adp, draft_board, player_context
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.optimize import _norm
+    from ffdata.db import connect
+    from ffdata.scoring import STANDARD
+    con = connect()
+    up = upcoming_nfl_season()
+    board = draft_board(up, rules=STANDARD, con=con, career=True, competition=True)
+    ctx = player_context(up, rules=STANDARD, con=con, ranked=board)
+    m = board[["player_id", "player", "position", "proj"]].merge(
+        ctx[["player_id", "team", "blocked_by"]], on="player_id", how="inner").dropna(subset=["team"])
+    adp = _consensus_adp(con)
+    if adp:
+        # A blocker must have a better (lower) ADP than the man he blocks, whenever
+        # both are ranked by the market -- the depth chart, not last-year points.
+        name_adp = {row.player: adp.get(_norm(row.player)) for row in m.itertuples()}
+        for row in m.itertuples():
+            if row.blocked_by and name_adp.get(row.player) is not None \
+               and name_adp.get(row.blocked_by) is not None:
+                assert name_adp[row.blocked_by] <= name_adp[row.player], \
+                    f"{row.player} blocked by a lower-ADP teammate {row.blocked_by}"
+    else:
+        # No feed: falls back to our projection -- the top-projected leads each room.
+        tops = m.sort_values("proj", ascending=False).groupby(["team", "position"]).head(1)
+        assert tops["blocked_by"].isna().all()
+    assert ctx["blocked_by"].notna().any()   # rooms actually have blockers
+
+
+@requires_data_lake
+def test_consensus_adp_orders_the_room_and_flags_disagreement():
+    """When a consensus-ADP feed is loaded, the room follows it (the market's depth
+    chart beats our own projection where they differ), and consensus_context marks
+    where our board disagrees with the market. Skips cleanly if no feed is present."""
+    from ffdata.draft import _consensus_adp, consensus_context, draft_board
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.db import connect
+    from ffdata.scoring import PPR
+    con = connect()
+    if not _consensus_adp(con):
+        import pytest as _pt
+        _pt.skip("no consensus_adp feed loaded")
+    up = upcoming_nfl_season()
+    board = draft_board(up, rules=PPR, con=con, career=True, competition=True)
+    tagged = consensus_context(board, con=con)
+    assert {"adp", "our_rank", "adp_delta"}.issubset(tagged.columns)
+    assert tagged["adp"].notna().sum() > 50
+    # adp_delta is exactly adp - our_rank where both exist.
+    both = tagged.dropna(subset=["adp"])
+    assert (both["adp_delta"] == both["adp"] - both["our_rank"]).all()
+    # consensus_context never changes VOR.
+    j = board[["player_id", "vor"]].merge(tagged[["player_id", "vor"]], on="player_id",
+                                          suffixes=("_a", "_b"))
+    assert (j["vor_a"] == j["vor_b"]).all()
+
+
+@requires_data_lake
+def test_consensus_adp_names_match_the_board():
+    """The ADP feed must actually join to our players (a name-normalisation guard) --
+    at least the skill-position starters, or the room ordering does nothing."""
+    from ffdata.draft import _consensus_adp, draft_board
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.optimize import _norm
+    from ffdata.db import connect
+    from ffdata.scoring import PPR
+    con = connect()
+    adp = _consensus_adp(con)
+    if not adp:
+        import pytest as _pt
+        _pt.skip("no consensus_adp feed loaded")
+    board = draft_board(upcoming_nfl_season(), rules=PPR, con=con)
+    bnorm = {_norm(p) for p in board["player"]}
+    matched = sum(1 for k in adp if k in bnorm)
+    assert matched >= 150, f"only {matched} ADP names matched the board -- normalisation drift?"

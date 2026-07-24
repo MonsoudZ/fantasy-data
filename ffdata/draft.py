@@ -726,6 +726,26 @@ def _team_pass_rate(con, season: int) -> pd.DataFrame:
     return df[["team", "pass_rate"]]
 
 
+def _consensus_adp(con) -> dict:
+    """normalised-name -> consensus ADP (lower = drafted earlier), if the optional
+    `consensus_adp` view exists (see scripts/ingest_adp.py). This is the market's
+    "who's the starter" answer -- cleaner than last year's points OR our own
+    projection for ordering a position room. Empty dict when no feed is loaded."""
+    from .optimize import _norm
+    if not _has_view(con, "consensus_adp"):
+        return {}
+    try:
+        df = con.sql("select player, adp from consensus_adp").df()
+    except Exception:  # noqa: BLE001 - missing/odd schema -> no consensus context
+        return {}
+    if df.empty:
+        return {}
+    df["adp"] = pd.to_numeric(df["adp"], errors="coerce")
+    df = df.dropna(subset=["adp"])
+    # Best (lowest) ADP per normalised name, so punctuation/suffix variants collapse.
+    return df.assign(k=df["player"].map(_norm)).groupby("k")["adp"].min().to_dict()
+
+
 def _depth_rank(con, season: int) -> dict:
     """player_id -> depth-chart rank for `season` (1 = starter), if available.
 
@@ -1127,6 +1147,33 @@ def career_year_context(board: pd.DataFrame, target_season: int, con=None) -> pd
     return b
 
 
+def consensus_context(board: pd.DataFrame, con=None) -> pd.DataFrame:
+    """Add consensus ADP + where WE disagree with it -- context, never a VOR input.
+
+    `adp`       -- the market's overall draft rank (lower = earlier), if a feed is
+                   loaded (scripts/ingest_adp.py); NaN otherwise.
+    `our_rank`  -- our own overall rank on this board (1 = top VOR).
+    `adp_delta` -- adp - our_rank. Positive = we're HIGHER on him than the market
+                   (our edge, or a reach); negative = the market likes him more
+                   than we do (a pick we're fading). Big gaps are where a draft is
+                   won or lost, so surface them for the human to adjudicate.
+    """
+    con = con or connect()
+    if "player_id" not in board.columns or board.empty:
+        return board
+    adp = _consensus_adp(con)
+    b = board.reset_index(drop=True).copy()
+    b["our_rank"] = b["vor"].rank(ascending=False, method="min").astype(int)
+    if adp:
+        from .optimize import _norm
+        b["adp"] = b["player"].map(lambda n: adp.get(_norm(n)) if isinstance(n, str) else None)
+        b["adp_delta"] = (b["adp"] - b["our_rank"]).round(0)
+    else:
+        b["adp"] = np.nan
+        b["adp_delta"] = np.nan
+    return b
+
+
 def best_available(board: pd.DataFrame, drafted: list[str] | None = None, position: str | None = None,
                    n: int = 15) -> pd.DataFrame:
     """Top remaining players by VOR, excluding already-drafted names."""
@@ -1499,7 +1546,8 @@ def line_context(target_season: int, con=None) -> pd.DataFrame:
     return by_team[by_team["ol_out"] >= _OL_THRESHOLD].reset_index(drop=True)
 
 
-def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+def player_context(target_season: int, rules: ScoringRules = PPR, con=None,
+                   ranked: pd.DataFrame | None = None) -> pd.DataFrame:
     """Situation context for every projectable player -- the room he's in.
 
     The season model sees a player's own prior stats plus a few team flags; it
@@ -1507,15 +1555,19 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     rookies alike:
 
       * moved      -- changed teams since last season (new offense, new role)
-      * blocked_by -- the best OTHER player at his position on his team, by last
+      * blocked_by -- the best OTHER player at his position on his team. Ranked by
+                      our forward PROJECTION when `ranked` is given (so a rookie
+                      starter the depth chart has RB1 isn't buried under a veteran
+                      backup who merely scored more LAST year); else by last
                       season's points. Empty means he leads the room.
       * vacated_fp -- production at his position that left the team (opportunity)
       * depth_rank -- preseason depth-chart spot (1 = starter)
       * pass_rate  -- team's pass share of plays; scheme caps the whole room
       * new_coach  -- the team changed head coach
 
-    Context only. These are shown next to the projection, never folded into it
-    (measured worse than the model alone -- see rookie_context's note).
+    `ranked` is an optional projection frame (player_id, player, position, proj);
+    pass the draft board so the room reflects who's actually ahead this year, not
+    who produced last year. Context only, never folded into the projection.
     """
     con = con or connect()
     prior = target_season - 1
@@ -1529,17 +1581,34 @@ def player_context(target_season: int, rules: ScoringRules = PPR, con=None) -> p
                                      "blocked_by_fp", "vacated_fp", "depth_rank",
                                      "pass_rate", "new_coach"])
 
-    # Who is in each room now, ranked by what they did last season.
-    room = now.merge(last[["player_id", "player", "position", "fp"]], on="player_id", how="left")
-    room["fp"] = room["fp"].fillna(0.0)
+    # Who is in each room now, ordered by who's actually AHEAD -- in priority:
+    #   1. consensus ADP (the market's depth chart) when a feed is loaded,
+    #   2. our forward projection (knows the rookie/new starter draft capital),
+    #   3. last season's points (the old fallback).
+    # ADP and projection each fix cases the other misses: our model rated Kenny
+    # Gainwell over Bucky Irving, but consensus (Irving 41, Gainwell 100) has the
+    # starter right; projection covers players the ADP feed doesn't list.
+    if ranked is not None and not ranked.empty:
+        src = (ranked[["player_id", "player", "position", "proj"]]
+               .rename(columns={"proj": "score"}))
+    else:
+        src = last.rename(columns={"fp": "score"})
+    room = now.merge(src, on="player_id", how="left")
+    room["score"] = room["score"].fillna(0.0)
     room = room.dropna(subset=["position"])
-    best = room.sort_values("fp", ascending=False).groupby(["team", "position"])
-    top1 = best.head(1)[["team", "position", "player", "fp"]].rename(
-        columns={"player": "top_player", "fp": "top_fp"})
-    top2 = (best.head(2).groupby(["team", "position"]).tail(1)[["team", "position", "player", "fp"]]
-            .rename(columns={"player": "second_player", "fp": "second_fp"}))
-    room = room.merge(top1, on=["team", "position"], how="left").merge(
-        top2, on=["team", "position"], how="left")
+    adp = _consensus_adp(con)
+    if adp:
+        from .optimize import _norm
+        room["adp"] = room["player"].map(lambda n: adp.get(_norm(n)) if isinstance(n, str) else None)
+    else:
+        room["adp"] = np.nan
+    room["_adp_sort"] = room["adp"].fillna(1e9)      # players without an ADP sort last
+    best = (room.sort_values(["team", "position", "_adp_sort", "score", "player"],
+                             ascending=[True, True, True, False, True])
+            .groupby(["team", "position"]))
+    top1 = best.head(1)[["team", "position", "player", "score"]].rename(
+        columns={"player": "top_player", "score": "top_fp"})
+    room = room.merge(top1, on=["team", "position"], how="left")
     # A player isn't blocked by himself: if he IS the top of the room, the man
     # behind him is irrelevant -- report nobody.
     is_top = room["player"].fillna("") == room["top_player"].fillna("")

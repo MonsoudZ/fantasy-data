@@ -364,9 +364,29 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   already regresses it — a risk to weigh on the specific back, not a mark-down.
   Current-status availability (IR/PUP/suspended) still lowers VOR via
   `availability_penalty`; this covers the historical-workload angle as a heads-up.
+  **Tested all three positions** (career-high in touches for RB, targets for
+  WR/TE): the effect is RB-SPECIFIC. RB −30% vs −8% (huge); **WR −18% vs −17%
+  (no signal at all)**; TE −27% vs −15% but n=12 (too thin to trust). RB is
+  workload/attrition-driven; WR production isn't tied to a one-year volume spike.
+  So the 📉 flag stays RB-only — confirmed by data, not assumed.
+- **The room is ordered by who's actually AHEAD, not who scored last year**
+  (`player_context(ranked=)`, `_consensus_adp`, `consensus_context`). `blocked_by`
+  used to sort a position room by LAST YEAR's points — which buries a rookie or
+  new starter under a veteran backup (and rookies weren't even in the room). Now
+  the room ranks by, in priority: (1) **consensus ADP** when a feed is loaded
+  (`scripts/ingest_adp.py` parses a rankings PDF's `Name (rank)` pairs → the
+  `consensus_adp` view; 319 players from CBS 2026, 87% match — misses are only Ks
+  and 3rd-string QBs), (2) our forward **projection** (rookie-aware via draft
+  capital), (3) last-year points. ADP and projection each fix the other's misses:
+  our model rated **Kenny Gainwell over Bucky Irving**, but consensus (Irving 41,
+  Gainwell 100) has the starter right; projection covers players the feed omits.
+  `consensus_context` also adds `adp` / `our_rank` / `adp_delta` to every row —
+  where WE disagree with the market (context only, never in VOR). Big deltas are
+  the model's own tells: we're too LOW on Irving/Hampton/Rice, too HIGH on backup
+  TEs (Theo Johnson). The board still degrades cleanly with no feed loaded.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
-  shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
-  player at his position, by last year's points; empty = leads the room),
+  shows the room — `moved` (with the prior team), `blocked_by` (who's ahead, by
+  the room ordering above; empty = leads the room),
   `vacated_fp`, `depth_rank`, `pass_rate`, `new_coach`. It reads coherently
   because it's all one join: DJ Moore CHI→BUF shows up as Rome Odunze's 262
   vacated AND as the man now blocking Khalil Shakir. Also context only, never a

@@ -820,7 +820,7 @@ function renderBoard(){
   };
   const ctxRow = p => {
     const c = p.ctx, r = p.rookie;
-    if(!c && !r) return "";
+    if(!c && !r && p.adp==null) return "";
     const bits = [];
     if(r) bits.push(`<span>pick ${r.pick}</span>`);
     if(c){
@@ -836,6 +836,14 @@ function renderBoard(){
     } else if(r){
       bits.push(`<span>${r.team}</span>`);
       if(r.blocked_by) bits.push(`<span>behind <b>${r.blocked_by}</b></span>`);
+    }
+    // Consensus ADP: green when the market drafts him LATER than we rank him (we
+    // can wait / we're higher on him), amber when it drafts him EARLIER than our
+    // value (he'll be gone / we're fading a popular pick). Context, not in VOR.
+    if(p.adp!=null){
+      const d = p.adp_delta, big = d!=null && Math.abs(d)>=30;
+      const cls = big ? (d>0 ? "rk-good" : "rk-bad") : "";
+      bits.push(`<span class="${cls}" title="Consensus overall draft rank; our rank is #${d!=null?p.adp-d:'?'}">ADP ${p.adp}</span>`);
     }
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
