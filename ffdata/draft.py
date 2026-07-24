@@ -132,6 +132,62 @@ def _team_coach(con) -> pd.DataFrame:
     """).df()
 
 
+_SOS_DECAY = 0.6  # recency weight on a defense's prior seasons (0.6 -> last yr 0.6)
+
+
+def _def_difficulty(con, rules: ScoringRules = PPR, decay: float = _SOS_DECAY) -> pd.DataFrame:
+    """Per (def_team, position, season): how easy that defense is to score on
+    GOING INTO `season`, as a multiplier where 1.0 = league-average opponent and
+    >1 = a weak defense that allows a lot. Recency-weighted over the defense's
+    STRICTLY-PRIOR seasons only, so it's leak-free -- and it emits a row for the
+    upcoming (not-yet-played) season too, so a 2026 draft has a number.
+    """
+    wk = con.sql("""
+        select * from weekly
+        where season_type='REG' and position in ('QB','RB','WR','TE')
+    """).df()
+    wk = score(wk, rules, col="fp")
+    a = (wk.groupby(["season", "position", "opponent_team"], as_index=False)["fp"]
+         .sum().rename(columns={"opponent_team": "def_team", "fp": "allowed"}))
+    a["lg"] = a.groupby(["season", "position"])["allowed"].transform("mean")
+    a["diff1"] = a["allowed"] / a["lg"].clip(lower=1.0)
+    targets = sorted(a["season"].unique()) + [int(a["season"].max()) + 1]
+    rows = []
+    for (d, p), g in a.groupby(["def_team", "position"], sort=False):
+        g = g.sort_values("season")
+        ss, dv = g["season"].to_numpy(), g["diff1"].to_numpy()
+        for T in targets:
+            prior = ss < T
+            if not prior.any():
+                est = 1.0
+            else:
+                w = decay ** (T - ss[prior])
+                est = float((dv[prior] * (w / w.sum())).sum())
+            rows.append({"def_team": d, "position": p, "season": int(T), "d_diff": est})
+    return pd.DataFrame(rows)
+
+
+def _forward_sos(con, rules: ScoringRules = PPR, decay: float = _SOS_DECAY) -> pd.DataFrame:
+    """Per (team, season, position): the average difficulty of the opponents on
+    that team's KNOWN schedule for `season`, using each opponent's leak-free
+    prior-form defensive strength. 1.0 = a league-average road, >1 = an easier
+    road ahead. Works for the upcoming season (2026) since the schedule is known
+    and `_def_difficulty` estimates unplayed seasons. This is the honest forward
+    strength-of-schedule; measured NOT to move season rankings (the spread is
+    ~+/-5% at the extremes), so it is decision-support context, never a VOR input.
+    """
+    ds = _def_difficulty(con, rules, decay)
+    opp = con.sql("""
+        select season, home_team team, away_team opp from schedules where game_type='REG'
+        union all
+        select season, away_team team, home_team opp from schedules where game_type='REG'
+    """).df()
+    m = opp.merge(ds.rename(columns={"def_team": "opp", "d_diff": "od"}),
+                  on=["season", "opp"], how="inner")
+    return (m.groupby(["team", "season", "position"], as_index=False)["od"]
+            .mean().rename(columns={"od": "sched_ahead"}))
+
+
 def _sos(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     """Strength of schedule: for each team-season-position, the average fantasy
     points its upcoming opponents allowed to that position the *prior* year.
@@ -835,6 +891,34 @@ def board_upside(board: pd.DataFrame, target_season: int, rules: ScoringRules = 
         & (proj_rank <= _ANCHOR_PROJ_RANK)         # actually startable, not a fluke
     ).fillna(False)
     return b.drop(columns=["u_ceiling", "u_floor"])
+
+
+def schedule_context(board: pd.DataFrame, target_season: int, rules: ScoringRules = PPR,
+                     con=None) -> pd.DataFrame:
+    """Add the forward strength-of-schedule for `target_season` to a board -- as
+    CONTEXT, not a ranking input.
+
+    `sched_ahead` is the average difficulty of the opponents a player's team is
+    scheduled to face (1.0 = league-average road, >1 = easier). `sched_rank` is
+    his rank within position, 1 = easiest road. Measured NOT to improve season
+    projections (the whole spread is ~+/-5%), so it is never folded into VOR --
+    but between two similar players a human can use it as a tiebreaker.
+    """
+    con = con or connect()
+    if "player_id" not in board.columns:
+        return board
+    fs = _forward_sos(con, rules)
+    fs = fs[fs["season"] == target_season][["team", "position", "sched_ahead"]]
+    ts = _team_season(con)
+    ts = ts[ts["season"] == target_season][["player_id", "team"]]
+    # `_team_season` carries no position, so join team->schedule by (team, position)
+    # using the board's own position column.
+    b = board.merge(ts, on="player_id", how="left")
+    b = b.merge(fs, on=["team", "position"], how="left")
+    b["sched_ahead"] = b["sched_ahead"].round(3)
+    b["sched_rank"] = (b.groupby("position")["sched_ahead"]
+                       .rank(ascending=False, method="min"))  # 1 = easiest road
+    return b.drop(columns=["team"])
 
 
 def best_available(board: pd.DataFrame, drafted: list[str] | None = None, position: str | None = None,

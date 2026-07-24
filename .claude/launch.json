@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ff-web",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "ffdata.web"],
+      "port": 8000
+    }
+  ]
+}

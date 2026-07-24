@@ -729,6 +729,21 @@ function renderBoard(){
       + `position — start him every week without sweating it.</div>`;
     return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">🛡️</span>`;
   };
+  // 🟢/🔴 forward strength-of-schedule for the draft year. Deliberately shown
+  // only at the extremes (top/bottom of the position): the whole spread is ~±5%,
+  // so it's a tiebreaker between similar players, never a reason to reach. Never
+  // touches VOR — the rank you see already ignores it.
+  const schedBadge = p => {
+    const s = p.sched_ahead;
+    if(s==null || (s<1.02 && s>0.98)) return "";
+    const easy = s>1;
+    const pct = Math.round(Math.abs(s-1)*100);
+    const rk = p.sched_rank!=null ? ` (${p.sched_rank}${easy?"th-easiest":"th-toughest"} road at ${p.position})` : "";
+    const body = `<div class="t-hd">${easy?"🟢 Easy":"🔴 Tough"} 2026 schedule</div><div class="t-sub">`
+      + `His team faces ${easy?"weaker":"stronger"} defenses than average — about <b>${pct}% ${easy?"easier":"harder"}</b>${rk}. `
+      + `A minor tiebreaker only: over a full season schedule barely moves a ranking, so it's not in his VOR.</div>`;
+    return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">${easy?"🟢":"🔴"}</span>`;
+  };
   // Rookies get a second row: the situation the projection can't see. Draft
   // capital is all the model knows, so show who's ahead and whether the offense
   // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
@@ -797,7 +812,7 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${schedBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";

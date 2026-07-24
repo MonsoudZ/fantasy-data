@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import advice
 from .draft import (DEFAULT_LEAGUE, availability_penalty, best_available, board_upside,
-                    draft_board, keeper_value, player_context, rookie_context, trade_value)
+                    draft_board, keeper_value, player_context, rookie_context,
+                    schedule_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -348,6 +349,9 @@ def _get_board(req: BoardRequest):
             # re-score VOR so his RANK drops, then add ceiling/floor/sleeper/anchor.
             board = availability_penalty(board, req.season, league=cfg, rules=rules)
             board = board_upside(board, req.season, rules=rules)
+            # Forward strength-of-schedule for the draft year -- context only, a
+            # tiebreaker between similar players, never folded into VOR.
+            board = schedule_context(board, req.season, rules=rules)
         except Exception:  # noqa: BLE001 - decision-support extras, never fatal
             _log.exception("board enrichment failed (%s)", req.season)
         _cache_put(_DRAFT, key, board)
@@ -414,6 +418,10 @@ def api_draft(req: DraftRequest):
         # Known-unavailable (IR/PUP/suspended): already marked down in VOR; name it.
         if "avail" in r and pd.notna(r.get("avail")):
             row["avail"] = str(r["avail"])
+        # Forward 2026 strength-of-schedule -- context tiebreaker, not in VOR.
+        if "sched_ahead" in r and pd.notna(r.get("sched_ahead")):
+            row["sched_ahead"] = round(float(r["sched_ahead"]), 3)
+            row["sched_rank"] = int(r["sched_rank"]) if pd.notna(r.get("sched_rank")) else None
         # Every player carries the situation the projection can't see -- who's
         # ahead of him, what left the room, the scheme. Rookies additionally
         # carry draft capital, which is all their projection is built on.

@@ -258,6 +258,26 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   OFF flag; **revisit only if fed NEXT year's actual 2026 schedule** (the
   strength-of-schedule the drafter cares about), not last year's, which needs the
   2026 opponent-strength estimate we don't have preseason.
+- **Forward strength-of-schedule doesn't move rankings either — but it's now
+  shown as CONTEXT** (`draft._def_difficulty` → `_forward_sos` →
+  `schedule_context`; board badge 🟢/🔴). The honest forward version: estimate
+  every defense's strength going INTO the draft year from its recency-weighted
+  PRIOR seasons (normalized so 1.0 = league-average, leak-free, and it emits a
+  row for the not-yet-played season so 2026 has a number), then average the
+  difficulty of the opponents each team is actually scheduled to face. A crude
+  1-year `sos` was already a model feature; swapping in this multi-year
+  normalized version, OR applying it as a post-hoc projection multiplier at
+  k=0.15/0.3/0.5, changed out-of-sample accuracy by nothing (rank 0.6503 →
+  0.6504-0.6507, MAE flat, standard, 2022-25). **Why:** the entire 2026 spread
+  is std ~0.02 — easiest road PHI **1.037**, toughest LV **0.963**, i.e. ±~5% at
+  the extremes — because a full season of matchups nets out and next-year defense
+  strength regresses hard. Schedule is a WEEKLY start/sit signal, not a
+  season-ranking one. NB the "Drake Maye easiest schedule ever" narrative is
+  about 2025 (already played); forward-looking, NE's 2026 QB road reads **0.976**
+  (slightly *tougher* than average). So it's surfaced like `blocked_by` /
+  injuries — a per-player `sched_ahead` / `sched_rank` **tiebreaker between
+  similar players, never folded into VOR** (the badge only lights at the top/
+  bottom of a position, and its tooltip says so outright).
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

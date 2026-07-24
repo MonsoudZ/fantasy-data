@@ -561,3 +561,50 @@ def test_streamability_discount_pulls_down_qb_and_te_vor():
     assert 0 < _STREAM_DISCOUNT["QB"] < 1 and 0 < _STREAM_DISCOUNT["TE"] < 1
     # The elite QB's discounted VOR is a fraction of its raw gap over replacement.
     assert out.loc["QB0", "vor"] < (out.loc["QB0", "proj"] - out.loc["QB19", "proj"])
+
+
+@requires_data_lake
+def test_forward_sos_is_leak_free_normalized_and_covers_the_draft_year():
+    """Forward strength-of-schedule: every season averages ~1.0 (it's normalized),
+    the spread is small (a full season of matchups nets out), and the upcoming,
+    not-yet-played season gets a number so a live draft isn't blank."""
+    from ffdata.draft import _def_difficulty, _forward_sos
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.db import connect
+    from ffdata.scoring import STANDARD
+    con = connect()
+    dd = _def_difficulty(con, STANDARD)
+    # A defense's very first season has no prior form -> neutral 1.0, never a leak.
+    first = dd.sort_values("season").groupby(["def_team", "position"]).head(1)
+    assert (first["d_diff"] == 1.0).all()
+    fs = _forward_sos(con, STANDARD)
+    up = upcoming_nfl_season()
+    cur = fs[fs["season"] == up]
+    assert not cur.empty, "no forward schedule for the draft year"
+    # Normalized: each season/position centers on ~1.0, and no team's whole-season
+    # road is more than ~15% off average -- schedule is a weak season-level signal.
+    for (_s, _p), g in fs.groupby(["season", "position"]):
+        assert abs(g["sched_ahead"].mean() - 1.0) < 0.05
+    assert cur["sched_ahead"].between(0.85, 1.15).all()
+
+
+@requires_data_lake
+def test_schedule_context_tags_the_board_without_touching_vor():
+    """schedule_context adds sched_ahead/sched_rank as context and leaves the VOR
+    ranking exactly as it found it -- schedule is a tiebreaker, not a value input."""
+    from ffdata.draft import draft_board, schedule_context
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.scoring import STANDARD
+    up = upcoming_nfl_season()
+    board = draft_board(up, rules=STANDARD)
+    tagged = schedule_context(board, up, rules=STANDARD)
+    assert {"sched_ahead", "sched_rank"}.issubset(tagged.columns)
+    assert tagged["sched_ahead"].notna().mean() > 0.7  # most rostered players tagged
+    # rank 1 = easiest road within a position
+    for pos, g in tagged.dropna(subset=["sched_rank"]).groupby("position"):
+        easiest = g.loc[g["sched_rank"].idxmin()]
+        assert easiest["sched_ahead"] == g["sched_ahead"].max()
+    # VOR and its ordering are untouched.
+    j = board[["player_id", "vor"]].merge(
+        tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
+    assert (j["vor_a"] == j["vor_b"]).all()
