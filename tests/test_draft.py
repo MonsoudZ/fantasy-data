@@ -680,3 +680,31 @@ def test_sos_quality_is_leak_free_covers_2026_and_is_a_model_feature():
     cur = sq[sq["season"] == up].sort_values("sos_q")   # ascending = weakest opponents
     easy_third = set(cur.head(11)["team"])
     assert {"CLE", "NO"}.issubset(easy_third)
+
+
+@requires_data_lake
+def test_career_year_context_flags_workhorses_not_rookies_and_leaves_vor_alone():
+    """The RB career-year regression flag: fires on established backs coming off a
+    career-high workhorse load, never on rookies (whose debut is trivially a high),
+    and never touches VOR (it's context, not a downgrade)."""
+    from ffdata.draft import draft_board, career_year_context, rookie_projection
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.db import connect
+    from ffdata.scoring import STANDARD
+    con = connect()
+    up = upcoming_nfl_season()
+    board = draft_board(up, rules=STANDARD, con=con)
+    tagged = career_year_context(board, up, con=con)
+    assert {"career_year", "prior_touches"}.issubset(tagged.columns)
+    flagged = tagged[tagged["career_year"]]
+    assert len(flagged) > 0                                   # some backs always qualify
+    assert (flagged["position"] == "RB").all()               # RB-only signal
+    assert (flagged["prior_touches"] >= 250).all()           # a real workhorse load
+    # No rookie should be flagged -- their first year has no prior baseline.
+    rk = rookie_projection(up, rules=STANDARD, con=con)
+    if rk is not None and not rk.empty:
+        assert not set(flagged["player_id"]) & set(rk["player_id"])
+    # VOR is identical before/after -- context only.
+    j = board[["player_id", "vor"]].merge(
+        tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
+    assert (j["vor_a"] == j["vor_b"]).all()

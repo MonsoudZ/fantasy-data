@@ -373,6 +373,12 @@ def _schedule_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
 _COMPETITION_FEATS = ["opp_share", "vac_share", "comp_vol"]
 _OPP_OPEN_SHARE = 0.20  # >=1/5 of the room's prior volume vacated -> touches opened up
 
+# Workload / injury-history durability was tested as a projection feature and NOT
+# shipped (see the ledger): raw mileage up-ranks proven workhorses (the opposite of
+# a risk signal), and a career-year touch spike doesn't beat the 0.6-prior blend
+# that already regresses it. The one true, human-useful piece -- an RB coming off a
+# career-high in touches regresses hard -- lives in `career_year_context` as a flag.
+
 
 def _player_volume(con) -> pd.DataFrame:
     """Per (player_id, season, position): position-appropriate opportunity volume
@@ -1072,6 +1078,52 @@ def competition_context(board: pd.DataFrame, target_season: int, rules: ScoringR
     b["opp_share"] = b["opp_share"].round(2)
     b["vac_share"] = b["vac_share"].round(2)
     b["opp_open"] = (b["vac_share"] >= _OPP_OPEN_SHARE).fillna(False)
+    return b
+
+
+# A back coming off a CAREER-HIGH in touches regresses hard: measured over the
+# established-RB seasons in the lake, those with a career-high workhorse load
+# (>=250 touches) dropped ~29% in fantasy points the next year and dipped 78% of
+# the time -- vs just -8% / 56% for RBs NOT off a career high. It is NOT a ranking
+# input (the drop is regression the 0.6-prior blend already applies, and an
+# explicit feature didn't beat it -- see the ledger) but it IS a true heads-up.
+_CAREER_YEAR_FLOOR = 250    # a career-high AND a real workhorse load
+_CAREER_YEAR_MIN_BASE = 50  # needs an established prior season (excludes rookies)
+
+
+def career_year_context(board: pd.DataFrame, target_season: int, con=None) -> pd.DataFrame:
+    """Flag RBs whose LAST season was a career-high in touches (regression risk).
+
+    Adds `career_year` (bool) and `prior_touches`. Context only -- the projection
+    already regresses a career year; this just names it so a drafter can weigh the
+    Barkley-2025 risk on the specific back."""
+    con = con or connect()
+    if "player_id" not in board.columns:
+        return board
+    prior = target_season - 1
+    tw = con.sql("""
+        select player_id, season,
+               sum(coalesce(carries, 0) + coalesce(targets, 0)) as touches
+        from weekly where season_type = 'REG' and position = 'RB'
+        group by 1, 2
+    """).df().sort_values(["player_id", "season"])
+    flag = {}
+    for pid, g in tw.groupby("player_id", sort=False):
+        g = g[g["season"] <= prior]
+        if g.empty or int(g["season"].max()) != prior:
+            continue
+        cur = float(g[g["season"] == prior]["touches"].iloc[0])
+        before = g[g["season"] < prior]["touches"]
+        peak_before = float(before.max()) if not before.empty else 0.0
+        # A career-high workhorse load, over an ESTABLISHED prior baseline -- a
+        # rookie's debut is trivially a career high but predicts a second-year
+        # LEAP, not regression, so exclude anyone without a real prior season.
+        is_cy = (peak_before >= _CAREER_YEAR_MIN_BASE
+                 and cur >= _CAREER_YEAR_FLOOR and cur >= peak_before)
+        flag[pid] = (is_cy, round(cur, 0))
+    b = board.copy()
+    b["career_year"] = b["player_id"].map(lambda p: flag.get(p, (False, None))[0])
+    b["prior_touches"] = b["player_id"].map(lambda p: flag.get(p, (False, None))[1])
     return b
 
 

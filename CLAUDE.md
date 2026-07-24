@@ -336,20 +336,34 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   surfaced where it belongs: `player_context.pass_rate` (the "54% pass" on every
   board row) reads the player's NEW team's prior pass rate — exactly the number a
   drafter wants for a receiver who changed teams. No code added; context suffices.
-- **Workload / injury-history durability does NOT improve ranking** (prototype
-  only, not shipped). Tested the "curse of 370" intuition — a huge touch count or
-  a fragile track record predicting a down/absent year (the CMC case: 429 touches
-  in 2019 → 3 games in 2020; 440 in 2025). Features: this-year touches, career
-  recency-weighted touches, games missed this year + career, peak-ever workload.
-  On the career+comp board stack, 2022-25 standard: rank **0.6664 → 0.6664**
-  (dead flat) and RB **0.5861 → 0.5833** (worse). Why: `career`'s `c_games_avg` /
-  `c_games_min` and the raw `p_games` already encode durability, so an explicit
-  injury-proneness feature is redundant; and a healthy-but-fragile profile (CMC
-  2026) does NOT reliably predict a down year across all backs — injury is mostly
-  random year-to-year, the anecdote doesn't generalize. Baking it into VOR would
-  make projections WORSE, so it stays out. Current-status availability (IR/PUP/
-  suspended) still lowers VOR via `availability_penalty`; historical proneness is
-  best left as the injury CONTEXT already on each row, for the human to judge.
+- **Workload / injury-history durability does NOT belong in VOR — but a career-year
+  regression FLAG does help the human** (`draft.career_year_context`, 📉 badge;
+  the durability model feature was tested and removed). Chased the "curse of 370"
+  from three angles, all leak-free, on the career+comp board stack, 2022-25:
+  1. **Raw mileage feature** (touches, career touches, games-missed, peak load):
+     rank **0.6664 → 0.6664** (flat), RB **0.5861 → 0.5833** (worse). And the
+     direction is BACKWARDS for risk — it *up-ranks* proven workhorses (CMC +9,
+     Henry +9 VOR) and *down-ranks* low-mileage backs (Gibbs −17), because in the
+     data heavy usage predicts continued production, not a bust. `career`'s
+     `c_games_avg`/`c_games_min` + `p_games` already carry durability, so it's
+     redundant on top of that.
+  2. **Career-year DIP is real** (descriptive): established RBs coming off a
+     career-high in touches (≥250) dropped **−29%** in fp the next year and dipped
+     **78%** of the time, vs **−8% / 56%** for RBs NOT off a career high. Robust
+     across thresholds (strict 1.25× jump and loose "career-high & ≥250" both give
+     ~−28% / 78%). The user's Barkley 2024→25 instinct is correct.
+  3. **But it's NOT rankable**: an explicit touch-spike feature moved RB rank
+     0.5847 → 0.5848 (flat) and RB MAE *worse*, because that −29% is regression to
+     the mean the **0.6-prior blend already applies** — the projection never ranks
+     a back at his career-year level to begin with.
+  So the honest home is CONTEXT: `career_year_context` flags RBs whose LAST season
+  was a career-high workhorse load (≥250 touches, established prior baseline so
+  rookies' debuts are excluded — a rookie career-high predicts a 2nd-year LEAP, not
+  regression). Shows `career_year` + `prior_touches`, never touches VOR (2026 flags
+  CMC 440, Bijan 390, Gibbs 337, Achane, Cook…). The 📉 tooltip states the projection
+  already regresses it — a risk to weigh on the specific back, not a mark-down.
+  Current-status availability (IR/PUP/suspended) still lowers VOR via
+  `availability_penalty`; this covers the historical-workload angle as a heads-up.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

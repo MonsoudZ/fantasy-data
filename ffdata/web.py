@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import advice
 from .draft import (DEFAULT_LEAGUE, availability_penalty, best_available, board_upside,
-                    competition_context, draft_board, keeper_value, player_context,
-                    rookie_context, schedule_context, trade_value)
+                    career_year_context, competition_context, draft_board, keeper_value,
+                    player_context, rookie_context, schedule_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -344,8 +344,11 @@ def _get_board(req: BoardRequest):
         # so the upside a mean projection hides is visible on draft day.
         cfg = _league_cfg(req.teams, req.lineup)
         # competition=True: the opportunity/volume signal is a small but measured
-        # projection gain ON TOP of career (and it helps RB, where it matters), so
-        # a human-facing board earns it -- see the ledger.
+        # projection gain ON TOP of career (and it helps RB, where it matters).
+        # Durability/workload is deliberately NOT folded in: raw mileage up-ranks
+        # proven workhorses (wrong direction for risk), and a career-year touch
+        # spike doesn't beat the 0.6-prior blend that already regresses it -- so
+        # regression risk is shown as CONTEXT, not baked into VOR (see the ledger).
         board = draft_board(req.season, cfg, rules=rules, career=True, competition=True)
         try:
             # Mark down anyone known to be unavailable (IR/PUP/suspended) and
@@ -358,6 +361,9 @@ def _get_board(req: BoardRequest):
             # Opportunity picture (his share of the room, what vacated) -- already
             # in VOR via competition=True; surfaced here so the WHY is visible.
             board = competition_context(board, req.season, rules=rules)
+            # Career-year regression risk for RBs -- context only (the projection
+            # already regresses it); names the Barkley-2025 dip for the human.
+            board = career_year_context(board, req.season)
         except Exception:  # noqa: BLE001 - decision-support extras, never fatal
             _log.exception("board enrichment failed (%s)", req.season)
         _cache_put(_DRAFT, key, board)
@@ -433,6 +439,10 @@ def api_draft(req: DraftRequest):
             row["opp_share"] = round(float(r["opp_share"]), 2)
             row["vac_share"] = round(float(r["vac_share"]), 2) if pd.notna(r.get("vac_share")) else None
             row["opp_open"] = bool(r.get("opp_open", False))
+        # Career-year regression risk (RB coming off a career-high in touches) -- context.
+        if bool(r.get("career_year", False)):
+            row["career_year"] = True
+            row["prior_touches"] = int(r["prior_touches"]) if pd.notna(r.get("prior_touches")) else None
         # Every player carries the situation the projection can't see -- who's
         # ahead of him, what left the room, the scheme. Rookies additionally
         # carry draft capital, which is all their projection is built on.
