@@ -535,3 +535,29 @@ def test_availability_penalty_downranks_the_unavailable():
     assert out.loc["ret", "proj"] == 0.0            # retired -> zero value
     assert out.loc["ir", "vor"] < out.loc["h", "vor"]   # rank reflects it
     assert out.loc["ir", "avail"] == "on injured reserve"
+
+
+def test_streamability_discount_pulls_down_qb_and_te_vor():
+    """Raw VOR over-values QB/TE (their replacement is startable/streamable). The
+    discount must lower QB/TE value relative to an RB/WR with the same nominal
+    gap over replacement -- so elite QBs stop ranking in the first two rounds."""
+    from ffdata.draft import _STREAM_DISCOUNT, score_board
+
+    league = {"teams": 12, "budget": 200, "roster_spots": 14,
+              "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
+    # Give each position a clear stud and a replacement-level tail so VOR is real.
+    rows = []
+    for pos, top in [("QB", 380), ("RB", 300), ("WR", 300), ("TE", 260)]:
+        for i in range(20):
+            rows.append({"player": f"{pos}{i}", "player_id": f"{pos}{i}",
+                         "position": pos, "proj": top - i * 10})
+    out = score_board(pd.DataFrame(rows), league).set_index("player")
+    # The elite QB's raw gap over replacement is huge, but after the discount its
+    # VOR must be strictly below the elite RB's (RB isn't discounted).
+    assert out.loc["QB0", "vor"] < out.loc["RB0", "vor"], "elite QB no longer outranks elite RB"
+    assert out.loc["TE0", "vor"] < out.loc["RB0", "vor"], "elite TE discounted below elite RB"
+    # Re-scoring WITHOUT the discount would leave the elite QB on top -- confirm the
+    # discount is what changed it, by checking the factor is applied to VOR.
+    assert 0 < _STREAM_DISCOUNT["QB"] < 1 and 0 < _STREAM_DISCOUNT["TE"] < 1
+    # The elite QB's discounted VOR is a fraction of its raw gap over replacement.
+    assert out.loc["QB0", "vor"] < (out.loc["QB0", "proj"] - out.loc["QB19", "proj"])

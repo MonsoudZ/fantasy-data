@@ -669,7 +669,14 @@ def score_board(proj: pd.DataFrame, league: dict) -> pd.DataFrame:
         pos = proj[proj["position"] == p].sort_values("proj", ascending=False).reset_index(drop=True)
         r = min(repl_rank[p], len(pos) - 1)
         repl_pts[p] = float(pos.loc[r, "proj"]) if len(pos) else 0.0
-    proj["vor"] = (proj["proj"] - proj["position"].map(repl_pts)).round(1)
+    proj["vor"] = proj["proj"] - proj["position"].map(repl_pts)
+    # Streamability discount. Raw VOR over-values QB and TE: their replacement is
+    # STARTABLE (you can wait and stream a 1-QB / 1-TE slot off waivers), so the
+    # nominal gap over the Nth starter overstates what an elite one is really worth
+    # on draft day. Consensus knows to wait; pure VOR doesn't. Discounting QB/TE
+    # VOR pulls them back toward where they actually go -- e.g. it takes elite QBs
+    # out of the first two rounds. RB/WR (you start 2-3, thin waivers) are 1.0.
+    proj["vor"] = (proj["vor"] * proj["position"].map(_STREAM_DISCOUNT).fillna(1.0)).round(1)
 
     # Auction: distribute the budget (above a $1 minimum per roster spot) by positive VOR.
     pool = league["teams"] * (league["budget"] - league["roster_spots"])
@@ -692,6 +699,9 @@ _AVAIL_PENALTY = {
 }
 # Sleeper live codes (freshest -- today's IR/PUP), same idea.
 _LIVE_PENALTY = {"IR": 0.35, "PUP": 0.5, "NA": 0.5, "Sus": 0.6, "DNR": 0.65, "Out": 0.9}
+# Streamability discount on VOR: a startable replacement is cheap at QB/TE (you
+# start one and can stream), so an elite one is worth less than raw VOR says.
+_STREAM_DISCOUNT = {"QB": 0.5, "TE": 0.7}
 
 
 def availability_penalty(board: pd.DataFrame, target_season: int,
