@@ -221,6 +221,26 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   bust but loses to upside. So `career` stays OFF everywhere until it earns its
   keep on the objective that matters; the feature is kept because the projection
   gain is real (useful if we ever rank on accuracy rather than title EV).
+- **Upside RESCUES career, but the stack still ties the simple baseline**
+  (`draft._upside_features`, `upside_weight=`, default 0). `_upside_features`
+  measures the SHAPE of a player's weeks (leak-free, recency-weighted): `u_ceiling`
+  = mean of his top-3 weekly scores (boom level), `u_floor` = bottom-3 (floor),
+  `u_boom`, `u_stdev`. `draft_board(upside_weight=w)` adds a bonus lifting players
+  whose weekly ceiling beats their position median, ON TOP of the accurate career
+  mean — additive, so a high-mean player who also booms gets the biggest lift.
+  Adding it undid career's floor damage (sharp titles 4% → 8%, naive 17% → 35%),
+  confirming the floor+ceiling direction. But career+upside (0.10) vs the plain
+  baseline over 48 runs/field: naive titles 35% vs 33%, **sharp 8% vs 10%** (one
+  title in 48 — a tie), mean finish slightly worse both. A single-slot 2025 scan
+  looked great (place 1.50) but was noise. **Net: neither career nor career+upside
+  beats the simple projection in the sim** — the real sim winners are STRUCTURAL
+  (roster-aware draft + rookie discount), not projection features, and the sim's
+  variance floor sits above any projection edge this size. Both stay OFF by
+  default. Their real value is DECISION SUPPORT for a human: career sharpens
+  accuracy, upside surfaces sleepers the mean buries (2024 CMC reads a 21.2
+  ceiling off 4 games) — a mechanical auto-manager can't exploit a sleeper the way
+  a drafter does, so the right home is a board VIEW (accuracy + a ceiling/sleeper
+  column), not an auto-applied weight.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),
