@@ -53,7 +53,7 @@ DEFAULT_LEAGUE = {"teams": 12, "budget": 200, "roster_spots": 15,
 _FEATS = ["p_games", "p_fp", "p_ppg", "p_targets", "p_carries", "p_receptions",
           "p_rec_yds", "p_rush_yds", "p_pass_yds", "p_pass_tds", "p_rush_tds",
           "p_rec_tds", "p_tgt_share", "age", "years_exp",
-          "team_changed", "coach_changed", "sos"] + [f"is_{p}" for p in POSITIONS]
+          "team_changed", "coach_changed", "sos", "sos_q"] + [f"is_{p}" for p in POSITIONS]
 _PARAMS = gbm_params(n_estimators=400, num_leaves=31, min_child_samples=20)
 # The GBM alone ranks slightly *worse* than raw prior-season points (it chases
 # breakouts); a blend beats both -- the model handles age/injury/regression, the
@@ -212,6 +212,47 @@ def _sos(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     m = opp.merge(prev, on=["season", "opp"])
     sos = m.groupby(["team", "season", "position"])["allowed"].mean().reset_index()
     return sos.rename(columns={"allowed": "sos"})
+
+
+def _sos_quality(con, decay: float = _SOS_DECAY) -> pd.DataFrame:
+    """Strength of schedule the Sharp-Football way: rate opponents by OVERALL team
+    quality (recency-weighted prior points-differential per game), not by the noisy
+    position-specific points they allowed. Per (team, season): the average quality
+    of the opponents on that team's schedule -- higher = a tougher road.
+
+    This is the measured winner over `_sos`: point-differential is a far more
+    stable opponent-strength estimate than one year of fp-allowed, so it moves
+    ranking where the granular version didn't (backtest in the ledger), and its
+    2026 easiest/hardest list lines up with Sharp's. Complementary to `_sos`, not
+    a replacement -- the two together beat either alone. Leak-free (strictly-prior
+    seasons only) and it emits a row for the upcoming season."""
+    g = con.sql("""
+        select home_team as team, season, (home_score - away_score) as diff
+          from schedules where game_type='REG' and home_score is not null
+        union all
+        select away_team as team, season, (away_score - home_score) as diff
+          from schedules where game_type='REG' and home_score is not null
+    """).df()
+    tq = g.groupby(["team", "season"], as_index=False)["diff"].mean().rename(columns={"diff": "pd"})
+    tq = tq.sort_values(["team", "season"])
+    targets = sorted(tq["season"].unique()) + [int(tq["season"].max()) + 1]
+    rows = []
+    for t, gg in tq.groupby("team", sort=False):
+        ss, pdv = gg["season"].to_numpy(), gg["pd"].to_numpy()
+        for T in targets:
+            prior = ss < T
+            est = 0.0 if not prior.any() else float(
+                (pdv[prior] * (decay ** (T - ss[prior]) / (decay ** (T - ss[prior])).sum())).sum())
+            rows.append({"team": t, "season": int(T), "team_q": est})
+    q = pd.DataFrame(rows)
+    opp = con.sql("""
+        select season, home_team as team, away_team as opp from schedules where game_type='REG'
+        union all
+        select season, away_team as team, home_team as opp from schedules where game_type='REG'
+    """).df()
+    m = opp.merge(q.rename(columns={"team": "opp", "team_q": "oq"}), on=["season", "opp"], how="inner")
+    return (m.groupby(["team", "season"], as_index=False)["oq"].mean()
+            .rename(columns={"oq": "sos_q"}))
 
 
 # Multi-year career + durability features, all computed from seasons <= S (the
@@ -444,6 +485,7 @@ def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False,
     """
     agg = _season_agg(con, rules)
     ts, coach, sos = _team_season(con), _team_coach(con), _sos(con, rules)
+    sos_q = _sos_quality(con)
     feat = agg.rename(columns={
         "games": "p_games", "fp": "p_fp", "targets": "p_targets", "carries": "p_carries",
         "receptions": "p_receptions", "rec_yds": "p_rec_yds", "rush_yds": "p_rush_yds",
@@ -473,6 +515,11 @@ def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False,
     df = df.merge(sos.rename(columns={"season": "tseason", "team": "new_team"}),
                   on=["tseason", "new_team", "position"], how="left")
     df["sos"] = df["sos"].fillna(df["sos"].median())
+    # Sharp-style OVERALL opponent-quality SOS (team point-differential based) --
+    # the measured improvement over the position-specific version, kept alongside it.
+    df = df.merge(sos_q.rename(columns={"season": "tseason", "team": "new_team"}),
+                  on=["tseason", "new_team"], how="left")
+    df["sos_q"] = df["sos_q"].fillna(0.0)
 
     for p in POSITIONS:
         df[f"is_{p}"] = (df["position"] == p).astype(int)

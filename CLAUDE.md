@@ -278,6 +278,23 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   injuries — a per-player `sched_ahead` / `sched_rank` **tiebreaker between
   similar players, never folded into VOR** (the badge only lights at the top/
   bottom of a position, and its tooltip says so outright).
+- **SOS done the Sharp way DOES move ranking — it was the METHOD, not the concept**
+  (`draft._sos_quality`, feature `sos_q`, shipped IN `_FEATS`). Prompted by
+  Sharp Football's 2026 SOS (they use Vegas win totals and note prior-year
+  *records* explain only 3.9% of actual SOS). The position-specific fp-allowed
+  SOS above is noise; rating opponents by **overall team quality** —
+  recency-weighted prior **point-differential per game** — is a far more stable
+  estimate and clears the bar: on the career+comp board stack, rank
+  **0.6664 → 0.6677** (+0.0013, ~2× the competition gain), positive in 3 of 4
+  seasons (2022 +0.0031, 2024 +0.0053, 2025 −0.0042), MAE flat. It's
+  COMPLEMENTARY to the fp-based `sos` (add 0.6677 > replace 0.6671), so both are
+  kept. Leak-free (strictly-prior seasons, recency-weighted) and it emits a 2026
+  row. Its 2026 easiest list — CLE, NO, PHI, DET, BAL — now AGREES with Sharp
+  (DET, NO, CIN, CLE, NYJ), where the fp version buried DET at #22. Lesson: a
+  weak SOS measured dead ≠ SOS is dead; the opponent-strength ESTIMATE is what
+  matters. Ceiling is still modest (schedule averages out over 17 games) — when a
+  season win-totals / full game-lines source lands, swap point-diff for market
+  strength and re-measure.
 - **Competition / opportunity: a small but REAL projection gain, and the best
   context signal yet** (`draft._competition_features`, `_COMPETITION_FEATS`,
   `competition=` flag; `competition_context` + 📈 board badge). Fantasy points
@@ -319,6 +336,20 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   surfaced where it belongs: `player_context.pass_rate` (the "54% pass" on every
   board row) reads the player's NEW team's prior pass rate — exactly the number a
   drafter wants for a receiver who changed teams. No code added; context suffices.
+- **Workload / injury-history durability does NOT improve ranking** (prototype
+  only, not shipped). Tested the "curse of 370" intuition — a huge touch count or
+  a fragile track record predicting a down/absent year (the CMC case: 429 touches
+  in 2019 → 3 games in 2020; 440 in 2025). Features: this-year touches, career
+  recency-weighted touches, games missed this year + career, peak-ever workload.
+  On the career+comp board stack, 2022-25 standard: rank **0.6664 → 0.6664**
+  (dead flat) and RB **0.5861 → 0.5833** (worse). Why: `career`'s `c_games_avg` /
+  `c_games_min` and the raw `p_games` already encode durability, so an explicit
+  injury-proneness feature is redundant; and a healthy-but-fragile profile (CMC
+  2026) does NOT reliably predict a down year across all backs — injury is mostly
+  random year-to-year, the anecdote doesn't generalize. Baking it into VOR would
+  make projections WORSE, so it stays out. Current-status availability (IR/PUP/
+  suspended) still lowers VOR via `availability_penalty`; historical proneness is
+  best left as the injury CONTEXT already on each row, for the human to judge.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

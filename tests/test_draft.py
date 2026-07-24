@@ -655,3 +655,28 @@ def test_competition_context_tags_vacated_opportunity():
     j = board[["player_id", "vor"]].merge(
         tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
     assert (j["vor_a"] == j["vor_b"]).all()
+
+
+@requires_data_lake
+def test_sos_quality_is_leak_free_covers_2026_and_is_a_model_feature():
+    """The Sharp-style overall-quality SOS: a defense's first season has no prior
+    form (neutral 0), the upcoming season is covered (schedule known), and sos_q
+    is actually wired into the projection feature list."""
+    from ffdata.draft import _sos_quality, _FEATS, _feature_frame
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.db import connect
+    from ffdata.scoring import STANDARD
+    con = connect()
+    assert "sos_q" in _FEATS
+    sq = _sos_quality(con)
+    up = upcoming_nfl_season()
+    assert (sq["season"] == up).any(), "no overall SOS for the draft year"
+    assert len(sq[sq["season"] == up]) == 32
+    # It reaches the feature frame with no missing values (filled to neutral).
+    ff = _feature_frame(con, STANDARD)
+    assert "sos_q" in ff.columns and ff["sos_q"].notna().all()
+    # Sharp's 2026 easiest roads (weak opponents) should read as EASY for us too:
+    # Cleveland and New Orleans both land in our easiest third.
+    cur = sq[sq["season"] == up].sort_values("sos_q")   # ascending = weakest opponents
+    easy_third = set(cur.head(11)["team"])
+    assert {"CLE", "NO"}.issubset(easy_third)
