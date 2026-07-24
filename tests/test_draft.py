@@ -615,7 +615,7 @@ def test_competition_features_are_leak_free_and_key_on_the_target_year():
     """Opportunity features describe the room a player enters in the TARGET season,
     from prior-year volume + the target-year roster -- never the target year's own
     stats. Shares are bounded, and a thinned room reads as higher opp_share."""
-    from ffdata.draft import _competition_features, _player_volume, _team_season
+    from ffdata.draft import _competition_features, _player_volume
     from ffdata.ingest import upcoming_nfl_season
     from ffdata.db import connect
     from ffdata.scoring import STANDARD
