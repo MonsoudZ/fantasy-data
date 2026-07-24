@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import advice
 from .draft import (DEFAULT_LEAGUE, availability_penalty, best_available, board_upside,
-                    draft_board, keeper_value, player_context, rookie_context,
-                    schedule_context, trade_value)
+                    competition_context, draft_board, keeper_value, player_context,
+                    rookie_context, schedule_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -343,7 +343,10 @@ def _get_board(req: BoardRequest):
         # read, not the sim's auto-manager. Then enrich with ceiling/floor/sleeper
         # so the upside a mean projection hides is visible on draft day.
         cfg = _league_cfg(req.teams, req.lineup)
-        board = draft_board(req.season, cfg, rules=rules, career=True)
+        # competition=True: the opportunity/volume signal is a small but measured
+        # projection gain ON TOP of career (and it helps RB, where it matters), so
+        # a human-facing board earns it -- see the ledger.
+        board = draft_board(req.season, cfg, rules=rules, career=True, competition=True)
         try:
             # Mark down anyone known to be unavailable (IR/PUP/suspended) and
             # re-score VOR so his RANK drops, then add ceiling/floor/sleeper/anchor.
@@ -352,6 +355,9 @@ def _get_board(req: BoardRequest):
             # Forward strength-of-schedule for the draft year -- context only, a
             # tiebreaker between similar players, never folded into VOR.
             board = schedule_context(board, req.season, rules=rules)
+            # Opportunity picture (his share of the room, what vacated) -- already
+            # in VOR via competition=True; surfaced here so the WHY is visible.
+            board = competition_context(board, req.season, rules=rules)
         except Exception:  # noqa: BLE001 - decision-support extras, never fatal
             _log.exception("board enrichment failed (%s)", req.season)
         _cache_put(_DRAFT, key, board)
@@ -422,6 +428,11 @@ def api_draft(req: DraftRequest):
         if "sched_ahead" in r and pd.notna(r.get("sched_ahead")):
             row["sched_ahead"] = round(float(r["sched_ahead"]), 3)
             row["sched_rank"] = int(r["sched_rank"]) if pd.notna(r.get("sched_rank")) else None
+        # Opportunity: his share of the room + whether touches vacated (in VOR).
+        if "opp_share" in r and pd.notna(r.get("opp_share")):
+            row["opp_share"] = round(float(r["opp_share"]), 2)
+            row["vac_share"] = round(float(r["vac_share"]), 2) if pd.notna(r.get("vac_share")) else None
+            row["opp_open"] = bool(r.get("opp_open", False))
         # Every player carries the situation the projection can't see -- who's
         # ahead of him, what left the room, the scheme. Rookies additionally
         # carry draft capital, which is all their projection is built on.

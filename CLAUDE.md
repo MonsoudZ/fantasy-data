@@ -278,6 +278,30 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   injuries — a per-player `sched_ahead` / `sched_rank` **tiebreaker between
   similar players, never folded into VOR** (the badge only lights at the top/
   bottom of a position, and its tooltip says so outright).
+- **Competition / opportunity: a small but REAL projection gain, and the best
+  context signal yet** (`draft._competition_features`, `_COMPETITION_FEATS`,
+  `competition=` flag; `competition_context` + 📈 board badge). Fantasy points
+  follow VOLUME, and volume moves when the players competing for touches leave or
+  arrive — something a player's own prior stats can't see. Leak-free (prior-year
+  volume + the preseason-known target-year roster; keyed by TARGET season):
+  `opp_share` = his share of the volume returning to his position room,
+  `vac_share` = fraction of his team's prior position volume that vacated,
+  `comp_vol` = raw prior volume of the others in the room now. Backtest 2022-25
+  out of sample, standard, ≥20 fp — rank corr / MAE:
+  baseline **0.6503 / 42.89**, +comp **0.6514 / 42.70**, +career 0.6657 / 42.20,
+  **+career+comp 0.6664 / 42.06**. Unlike schedule it moves BOTH metrics the
+  right way, and it helps RB specifically (RB rank 0.5834 → **0.5861** on the
+  career stack — where touch competition actually lives). NB comp-ALONE *hurts*
+  RB rank (0.5791 → 0.5737); it only helps stacked on career, so it's enabled on
+  the board (always `career=True`) but NOT added to the sim's non-career board.
+  The gain is small (+0.0007 rho on career) so the honest headline is "marginal
+  for projection", but it's the first such signal that's net-positive everywhere
+  it's on. Its bigger value is CONTEXT: it quantifies exactly what a drafter says
+  out loud — Gibbs 2026 reads `opp_share` 0.54→**0.70**, `vac_share` **0.36**
+  (Montgomery's touches gone), competition 268→147; Bijan 0.71→**0.76** / 0.28.
+  The 📈 badge lights when ≥20% of the room vacated (`_OPP_OPEN_SHARE`, ~15 of the
+  top 60), and unlike schedule its tooltip says the projection ALREADY reflects
+  it. Board runs `draft_board(..., career=True, competition=True)`.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

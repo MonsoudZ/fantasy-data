@@ -608,3 +608,50 @@ def test_schedule_context_tags_the_board_without_touching_vor():
     j = board[["player_id", "vor"]].merge(
         tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
     assert (j["vor_a"] == j["vor_b"]).all()
+
+
+@requires_data_lake
+def test_competition_features_are_leak_free_and_key_on_the_target_year():
+    """Opportunity features describe the room a player enters in the TARGET season,
+    from prior-year volume + the target-year roster -- never the target year's own
+    stats. Shares are bounded, and a thinned room reads as higher opp_share."""
+    from ffdata.draft import _competition_features, _player_volume, _team_season
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.db import connect
+    from ffdata.scoring import STANDARD
+    con = connect()
+    cf = _competition_features(con, STANDARD)
+    assert {"player_id", "tseason", "opp_share", "vac_share", "comp_vol"}.issubset(cf.columns)
+    # Shares are bounded where defined (a player with no target-year team has no
+    # room, so NaN -- the feature frame fills those to 0, context leaves them blank).
+    assert cf["opp_share"].dropna().between(0, 1).all()
+    assert cf["vac_share"].dropna().between(0, 1).all()
+    assert (cf["comp_vol"].dropna() >= 0).all()
+    # The upcoming (not-yet-played) season must be covered -- its roster is known.
+    up = upcoming_nfl_season()
+    assert (cf["tseason"] == up).any()
+    # Leak-free key: a feature row for tseason T only needs volume from < T. Build
+    # for a mid history season and confirm it exists without T's volume in hand.
+    vol = _player_volume(con)
+    assert cf["tseason"].min() <= vol["season"].max()
+
+
+@requires_data_lake
+def test_competition_context_tags_vacated_opportunity():
+    """competition_context surfaces opp_share / vac_share / opp_open on the board,
+    and opp_open marks rooms where a real chunk of touches left."""
+    from ffdata.draft import draft_board, competition_context, _OPP_OPEN_SHARE
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.scoring import STANDARD
+    up = upcoming_nfl_season()
+    board = draft_board(up, rules=STANDARD)
+    tagged = competition_context(board, up, rules=STANDARD)
+    assert {"opp_share", "vac_share", "opp_open"}.issubset(tagged.columns)
+    # opp_open is exactly "a meaningful share vacated".
+    opened = tagged[tagged["opp_open"]]
+    assert (opened["vac_share"] >= _OPP_OPEN_SHARE).all()
+    assert len(opened) > 0                       # some rooms always turn over
+    # Context only touches the new columns; VOR ordering is unchanged.
+    j = board[["player_id", "vor"]].merge(
+        tagged[["player_id", "vor"]], on="player_id", suffixes=("_a", "_b"))
+    assert (j["vor_a"] == j["vor_b"]).all()

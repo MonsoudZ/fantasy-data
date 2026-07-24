@@ -324,6 +324,77 @@ def _schedule_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     return g[["player_id", "season", "sched_faced", "p_fp_adj"]]
 
 
+# Competition / opportunity: fantasy points follow VOLUME (touches, targets), and
+# volume moves when the players competing for it leave or arrive. A player's own
+# prior stats can't see that his backfield-mate walked in free agency. These do,
+# leak-free (prior-year volume + the preseason-known target-year roster). Keyed by
+# TARGET season because the room he's in is a preseason fact about S, not S-1.
+_COMPETITION_FEATS = ["opp_share", "vac_share", "comp_vol"]
+_OPP_OPEN_SHARE = 0.20  # >=1/5 of the room's prior volume vacated -> touches opened up
+
+
+def _player_volume(con) -> pd.DataFrame:
+    """Per (player_id, season, position): position-appropriate opportunity volume
+    -- carries+targets for a back, targets for a pass-catcher, attempts for a QB."""
+    wk = con.sql("""
+        select player_id, season, position,
+               sum(coalesce(carries, 0))  as carr,
+               sum(coalesce(targets, 0))  as tgt,
+               sum(coalesce(attempts, 0)) as att
+        from weekly
+        where season_type = 'REG' and position in ('QB','RB','WR','TE')
+        group by 1, 2, 3
+    """).df()
+    wk["vol"] = np.where(wk["position"] == "RB", wk["carr"] + wk["tgt"],
+                np.where(wk["position"].isin(["WR", "TE"]), wk["tgt"], wk["att"]))
+    return wk[["player_id", "season", "position", "vol"]]
+
+
+def _competition_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+    """Per (player_id, tseason): the opportunity picture he walks into.
+
+      * opp_share -- his share of the volume RETURNING to his position room (his
+        prior volume / the prior volume of everyone on his new team at his pos).
+        High = he's the clear guy; low = a crowded room.
+      * vac_share -- fraction of his team's prior position volume that LEFT (players
+        who were there last year and aren't now). High = touches up for grabs.
+      * comp_vol  -- raw prior volume of the OTHER players in his room now (incoming
+        competition included) -- the crowding in absolute terms.
+
+    Leak-free: only (tseason-1) volume and the tseason roster (a preseason fact).
+    This is the Gibbs/Bijan signal -- when a backfield-mate leaves, opp_share and
+    vac_share jump while comp_vol falls, before he's played a down.
+    """
+    vol = _player_volume(con)
+    ts = _team_season(con)
+    have = set(vol["season"])
+    out = []
+    for T in sorted(s for s in ts["season"].unique() if s - 1 in have):
+        prev = vol[vol["season"] == T - 1][["player_id", "position", "vol"]]
+        now = ts[ts["season"] == T][["player_id", "team"]]
+        then = ts[ts["season"] == T - 1][["player_id", "team"]].rename(columns={"team": "pteam"})
+        d = prev.merge(now, on="player_id", how="left").merge(then, on="player_id", how="left")
+        # Volume returning to each (team, position) room = prior vol of everyone on it now.
+        room = (d.dropna(subset=["team"]).groupby(["team", "position"], as_index=False)["vol"]
+                .sum().rename(columns={"vol": "room_vol"}))
+        d = d.merge(room, on=["team", "position"], how="left")
+        # Vacated = prior vol whose owner was on this team last year but isn't now.
+        d["left"] = d["pteam"].notna() & (d["pteam"] != d["team"].fillna("__gone__"))
+        vac = (d[d["left"]].groupby(["pteam", "position"], as_index=False)["vol"].sum()
+               .rename(columns={"pteam": "team", "vol": "vac_vol"}))
+        pt = (d.dropna(subset=["pteam"]).groupby(["pteam", "position"], as_index=False)["vol"].sum()
+              .rename(columns={"pteam": "team", "vol": "pt_total"}))
+        d = d.merge(vac, on=["team", "position"], how="left").merge(pt, on=["team", "position"], how="left")
+        d["vac_vol"] = d["vac_vol"].fillna(0.0)
+        d["opp_share"] = d["vol"] / d["room_vol"].clip(lower=1.0)
+        d["vac_share"] = d["vac_vol"] / d["pt_total"].clip(lower=1.0)
+        d["comp_vol"] = (d["room_vol"] - d["vol"]).clip(lower=0.0)
+        d["tseason"] = int(T)
+        out.append(d[["player_id", "tseason", "opp_share", "vac_share", "comp_vol"]])
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(
+        columns=["player_id", "tseason", *_COMPETITION_FEATS])
+
+
 def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     """Per (player_id, season): a recency-weighted view of his career THROUGH that
     season, plus durability. Leak-free -- only seasons <= S feed row S.
@@ -363,12 +434,13 @@ def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
 
 
 def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False,
-                   schedule: bool = False) -> pd.DataFrame:
+                   schedule: bool = False, competition: bool = False) -> pd.DataFrame:
     """Feature rows: prior-season aggregates (S) + preseason context at S+1 ->
     target = fp at S+1. Target is NaN for the not-yet-played season.
 
     `career=True` merges the leak-free multi-year career + durability features;
-    `schedule=True` merges schedule-adjusted prior production.
+    `schedule=True` merges schedule-adjusted prior production;
+    `competition=True` merges the opportunity/volume-competition features.
     """
     agg = _season_agg(con, rules)
     ts, coach, sos = _team_season(con), _team_coach(con), _sos(con, rules)
@@ -413,11 +485,17 @@ def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False,
         df = df.merge(sf, on=["player_id", "season"], how="left")
         df["sched_faced"] = df["sched_faced"].fillna(1.0)
         df["p_fp_adj"] = df["p_fp_adj"].fillna(df["p_fp"])
+    if competition:
+        cp = _competition_features(con, rules)  # keyed by TARGET season
+        df = df.merge(cp, on=["player_id", "tseason"], how="left")
+        for k in _COMPETITION_FEATS:
+            df[k] = df[k].fillna(0.0)
     return df
 
 
 def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
-                   career: bool = False, schedule: bool = False) -> pd.DataFrame:
+                   career: bool = False, schedule: bool = False,
+                   competition: bool = False) -> pd.DataFrame:
     """Project every returning player's total points for `target_season`.
 
     Trains on pairs whose target season is strictly before `target_season`
@@ -425,8 +503,9 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
     sets the scoring the projection is expressed in (default PPR).
     """
     con = con or connect()
-    df = _feature_frame(con, rules, career=career, schedule=schedule)
-    feats = _FEATS + (_CAREER_FEATS if career else []) + (_SCHEDULE_FEATS if schedule else [])
+    df = _feature_frame(con, rules, career=career, schedule=schedule, competition=competition)
+    feats = (_FEATS + (_CAREER_FEATS if career else []) + (_SCHEDULE_FEATS if schedule else [])
+             + (_COMPETITION_FEATS if competition else []))
     train = df[(df["tseason"] < target_season) & df["target_fp"].notna()]
     test = df[df["tseason"] == target_season].copy()
     if test.empty:
@@ -714,7 +793,7 @@ def _replacement_ranks(league: dict) -> dict:
 def draft_board(target_season: int, league: dict | None = None,
                 rules: ScoringRules = PPR, include_rookies: bool = True,
                 con=None, rookie_discount: float = 1.0, career: bool = False,
-                upside_weight: float = 0.0) -> pd.DataFrame:
+                upside_weight: float = 0.0, competition: bool = False) -> pd.DataFrame:
     """Ranked draft board: season projection, VOR, and auction dollar value.
 
     `rules` sets the league scoring (default PPR); VOR and auction $ follow from
@@ -731,7 +810,8 @@ def draft_board(target_season: int, league: dict | None = None,
     """
     league = league or DEFAULT_LEAGUE
     con = con or connect()
-    proj = project_season(target_season, rules=rules, con=con, career=career)
+    proj = project_season(target_season, rules=rules, con=con, career=career,
+                          competition=competition)
     if include_rookies:
         rookies = rookie_projection(target_season, rules=rules, con=con)
         if rookies is not None and not rookies.empty:
@@ -919,6 +999,33 @@ def schedule_context(board: pd.DataFrame, target_season: int, rules: ScoringRule
     b["sched_rank"] = (b.groupby("position")["sched_ahead"]
                        .rank(ascending=False, method="min"))  # 1 = easiest road
     return b.drop(columns=["team"])
+
+
+def competition_context(board: pd.DataFrame, target_season: int, rules: ScoringRules = PPR,
+                        con=None) -> pd.DataFrame:
+    """Add the opportunity picture for `target_season` to a board.
+
+    Unlike schedule, this small signal DID nudge the projection (see the ledger)
+    and, more usefully, it quantifies the thing a drafter reasons about out loud:
+    "his competition for touches left." Columns:
+
+      * opp_share  -- his share of the volume returning to his position room (0-1)
+      * vac_share  -- fraction of his team's prior position volume that vacated
+      * opp_open   -- True when a meaningful chunk vacated (touches up for grabs)
+
+    When `competition=True` fed the board's projection these are already reflected
+    in VOR; this just surfaces the WHY so a human can see it.
+    """
+    con = con or connect()
+    if "player_id" not in board.columns:
+        return board
+    cp = _competition_features(con, rules)
+    cur = cp[cp["tseason"] == target_season][["player_id", "opp_share", "vac_share"]]
+    b = board.merge(cur, on="player_id", how="left")
+    b["opp_share"] = b["opp_share"].round(2)
+    b["vac_share"] = b["vac_share"].round(2)
+    b["opp_open"] = (b["vac_share"] >= _OPP_OPEN_SHARE).fillna(False)
+    return b
 
 
 def best_available(board: pd.DataFrame, drafted: list[str] | None = None, position: str | None = None,

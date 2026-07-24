@@ -744,6 +744,19 @@ function renderBoard(){
       + `A minor tiebreaker only: over a full season schedule barely moves a ranking, so it's not in his VOR.</div>`;
     return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">${easy?"🟢":"🔴"}</span>`;
   };
+  // 📈 opportunity: touches vacated from his position room since last year (a
+  // competitor left), so there's volume up for grabs. UNLIKE schedule this IS in
+  // his VOR — the projection already sees the thinner room; the badge shows WHY.
+  const oppBadge = p => {
+    if(!p.opp_open) return "";
+    const vac = p.vac_share!=null ? Math.round(p.vac_share*100) : null;
+    const shr = p.opp_share!=null ? Math.round(p.opp_share*100) : null;
+    const body = `<div class="t-hd">📈 Opportunity opened up</div><div class="t-sub">`
+      + `About <b>${vac!=null?vac+"%":"a chunk"}</b> of his position's touches from last year `
+      + `left the team${shr!=null?`, and he now commands <b>${shr}%</b> of what's returning`:""}. `
+      + `Volume drives fantasy points — this is already reflected in his projection.</div>`;
+    return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">📈</span>`;
+  };
   // Rookies get a second row: the situation the projection can't see. Draft
   // capital is all the model knows, so show who's ahead and whether the offense
   // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
@@ -812,7 +825,7 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${schedBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${oppBadge(p)}${schedBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
