@@ -208,6 +208,19 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   Lemon (pick 20) has 273 vacated but sits behind DeVonta Smith at DC2 on a 51%-
   pass offense, while Carnell Tate (pick 4) has only 83 vacated yet is already
   DC1 on a 60%-pass team. The raw number says Lemon; the situation says Tate.
+- **Multi-year career + durability: better projection, but NOT more titles**
+  (`draft._career_features`, `career=` flag, default OFF). Recency-weighted career
+  form + games-played durability are leak-free (row S sees only seasons ≤ S) and
+  genuinely improve the season projection every year — rank **0.734 → 0.749**, MAE
+  **34.2 → 33.5** (standard, 2022-25 out of sample). Unlike the context features,
+  this is a real accuracy gain. **But it FAILED the sim test**: 48 runs/field, it
+  won *fewer* leagues — naive titles 33% → 17%, sharp 10% → 4%. The football
+  reason is coherent: career/durability rewards proven, safe production and
+  penalises the unproven, which raises accuracy but suppresses the **ceiling** —
+  and a title usually needs a breakout that *exceeds* career norms. Floor beats
+  bust but loses to upside. So `career` stays OFF everywhere until it earns its
+  keep on the objective that matters; the feature is kept because the projection
+  gain is real (useful if we ever rank on accuracy rather than title EV).
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

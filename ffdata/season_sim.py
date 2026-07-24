@@ -349,7 +349,7 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
 
 def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                  con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT,
-                 career: bool = True) -> tuple[list[dict], list[dict]]:
+                 career: bool = False) -> tuple[list[dict], list[dict]]:
     """(our board, the naive opponents' board) -- preseason only, no projector.
 
     Split out of `prepare` because it costs seconds while fitting the weekly
