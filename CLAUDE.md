@@ -302,6 +302,23 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   The 📈 badge lights when ≥20% of the room vacated (`_OPP_OPEN_SHARE`, ~15 of the
   top 60), and unlike schedule its tooltip says the projection ALREADY reflects
   it. Board runs `draft_board(..., career=True, competition=True)`.
+- **Scheme / pace (team pass-rate + plays-per-game) does NOT earn a spot in the
+  projection — but it's already the right kind of context.** Tested the ENTERING
+  team's prior-year pass share and pace as features (leak-free: target-team's
+  S-1 `t_pass_rate` / `t_plays_pg` → predict S). Backtest 2022-25, standard,
+  ≥20 fp: **alone it HURTS** (rho 0.6503 → 0.6493, RB 0.5791 → 0.5749), and on
+  the career+comp board stack it's a +0.0006 whisper (0.6664 → 0.6670). The
+  reason is double-counting: a player's own prior targets/carries already encode
+  his scheme, so the team's raw rate is mostly redundant noise. The one place it
+  IS real is **team-changers** (new environment his own history can't show):
+  splitting the board stack by `team_changed`, +scheme moves MOVERS +0.0064
+  (0.5179 → 0.5243) but STAYERS −0.0012 (0.7030 → 0.7018) — a genuine signal on
+  ~25% of players, drowned by the majority it double-counts. Net below the bar
+  (competition cleared it by helping RB broadly and never hurting a subset;
+  scheme degrades stayers), so it stays OUT of the projection. It's already
+  surfaced where it belongs: `player_context.pass_rate` (the "54% pass" on every
+  board row) reads the player's NEW team's prior pass rate — exactly the number a
+  drafter wants for a receiver who changed teams. No code added; context suffices.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),
