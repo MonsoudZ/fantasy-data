@@ -491,13 +491,20 @@ def _replacement_ranks(league: dict) -> dict:
 
 def draft_board(target_season: int, league: dict | None = None,
                 rules: ScoringRules = PPR, include_rookies: bool = True,
-                con=None) -> pd.DataFrame:
+                con=None, rookie_discount: float = 1.0) -> pd.DataFrame:
     """Ranked draft board: season projection, VOR, and auction dollar value.
 
     `rules` sets the league scoring (default PPR); VOR and auction $ follow from
     the scored projections, so the whole board reflects the chosen scoring.
     `include_rookies` folds in the draft-capital rookie model when the
     `draft_picks` source is available (silently veterans-only if it isn't).
+
+    `rookie_discount` scales rookie projections (default 1.0 = as-is). The
+    rookie model is ~calibrated on the MEAN (actual/projected ~0.89 over 2021-24)
+    but rookies are high-variance -- most bust, a few hit -- so in a H2H league
+    where you need a weekly floor, a veteran at the same projection is worth more.
+    A discount below 1 is a risk haircut, not a claim the mean is wrong. The
+    season simulation measures its effect; the shipped board leaves it at 1.0.
     """
     league = league or DEFAULT_LEAGUE
     con = con or connect()
@@ -505,6 +512,9 @@ def draft_board(target_season: int, league: dict | None = None,
     if include_rookies:
         rookies = rookie_projection(target_season, rules=rules, con=con)
         if rookies is not None and not rookies.empty:
+            if rookie_discount != 1.0:
+                rookies = rookies.copy()
+                rookies["proj"] = rookies["proj"] * rookie_discount
             proj = (pd.concat([proj, rookies], ignore_index=True)
                     .drop_duplicates(subset="player_id", keep="first"))
     if proj.empty:

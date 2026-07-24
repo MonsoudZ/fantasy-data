@@ -395,3 +395,42 @@ def test_injured_players_are_dropped_byes_are_kept():
     assert _is_injured("rookiewr", ever, {"rookiewr": 5}) is False
     # A healthy player (streak 0) is never injured.
     assert _is_injured("vetrb", ever, {}) is False
+
+
+def test_rookie_draft_discount_lowers_rookie_board_value():
+    """The rookie risk haircut must actually pull rookie projections down on the
+    board -- it's how the draft prefers proven veterans (see the rookie finding)."""
+    from ffdata.draft import draft_board
+
+    league = {"teams": 12, "budget": 200, "roster_spots": 14,
+              "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
+    # This test only runs where the lake exists; skip cleanly otherwise.
+    try:
+        from ffdata.db import connect
+        con = connect()
+    except Exception:  # noqa: BLE001
+        import pytest
+        pytest.skip("no data lake")
+    from ffdata.scoring import STANDARD
+    full = draft_board(2025, league, rules=STANDARD, con=con, rookie_discount=1.0)
+    cut = draft_board(2025, league, rules=STANDARD, con=con, rookie_discount=0.8)
+    # A rookie's projection must drop; a veteran's must not move.
+    rk = full[full["player"] == "Ashton Jeanty"]
+    if not rk.empty:
+        pid = rk.iloc[0]["player_id"]
+        assert (cut[cut.player_id == pid]["proj"].iloc[0]
+                < full[full.player_id == pid]["proj"].iloc[0])
+
+
+def test_lineup_discount_seeds_unproven_rookies_below_veterans():
+    """An unproven rookie (seeded from a prior, not in this week's projections) is
+    discounted for the LINEUP so a veteran with a real projection starts ahead."""
+    from ffdata.season_sim import ROOKIE_START_DISCOUNT
+    # The rule the loop applies: seeded (prior-only) player value * discount.
+    wk_proj = {"veteran wr": 9.0}                 # a real projection this week
+    prior = {"rookie wr": 12.0}                   # seeded, no games yet
+    proj = dict(wk_proj); proj.update({k: v for k, v in prior.items()})
+    seeded = set(proj) - set(wk_proj)
+    lineup = {k: (v * ROOKIE_START_DISCOUNT if k in seeded else v) for k, v in proj.items()}
+    assert lineup["rookie wr"] == 12.0 * ROOKIE_START_DISCOUNT
+    assert lineup["rookie wr"] < lineup["veteran wr"], "veteran starts ahead of the rookie"

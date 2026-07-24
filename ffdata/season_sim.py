@@ -75,6 +75,16 @@ WAIVER_MIN_GAIN = 3.0
 # starting upgrade anyway, so the tail is dead weight -- capping it is realistic
 # and keeps the all-team replay fast enough to sweep every draft slot.
 WAIVER_POOL_PER_POS = 6
+# Risk haircut on rookie DRAFT value. Rookie projections are ~calibrated on the
+# mean but high-variance (most bust), so a veteran at the same number is safer in
+# a H2H league. Below 1 makes the board prefer proven veterans; measured by the
+# sweep. See CLAUDE.md's rookie finding.
+ROOKIE_DRAFT_DISCOUNT = 0.80
+# Lineup haircut on an UNPROVEN rookie (seeded from his preseason prior, no games
+# yet). Below 1 means "start the veteran, hold the rookie" -- he only starts when
+# he's clearly better or there's no veteran for the slot. Once he has real weekly
+# projections he's judged on those, no discount.
+ROOKIE_START_DISCOUNT = 0.60
 
 
 def _seed_rookie_prior(wk_proj: dict, prior_wk: dict, ever_projected: set) -> dict:
@@ -338,7 +348,8 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
 
 
 def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
-                 con=None) -> tuple[list[dict], list[dict]]:
+                 con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT
+                 ) -> tuple[list[dict], list[dict]]:
     """(our board, the naive opponents' board) -- preseason only, no projector.
 
     Split out of `prepare` because it costs seconds while fitting the weekly
@@ -354,7 +365,8 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
 
     league = {"teams": n_teams, "budget": 200, "roster_spots": ROSTER_SIZE,
               "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
-    board = draft_board(season, league, rules=rules, con=con)
+    board = draft_board(season, league, rules=rules, con=con,
+                        rookie_discount=rookie_discount)
     kdst = _preseason_kdst(con, season, rules)
     # Keep VOR and auction $ on each record -- they ARE the reason a VOR draft
     # takes a player (highest value over replacement still available), so the
@@ -596,9 +608,16 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
         for k, v in proj.items():           # fold this week into each player's form
             psum[k] = psum.get(k, 0.0) + v
             pcnt[k] = pcnt.get(k, 0) + 1
+        # LINEUP projection: an unproven rookie (seeded from his preseason prior,
+        # no games yet) is discounted so a veteran with a real projection starts
+        # ahead of him -- "start the veteran, hold the rookie". He still starts
+        # when there's no veteran for the slot, or when even discounted he's best.
+        seeded = set(proj) - set(wk_proj)
+        lineup_proj = {k: (v * ROOKIE_START_DISCOUNT if k in seeded else v)
+                       for k, v in proj.items()}
 
         for t in range(n_teams):
-            starters = start_by_projection(rosters[t], proj, STARTERS)
+            starters = start_by_projection(rosters[t], lineup_proj, STARTERS)
             scores[t, wi] = week_score(starters, actual_w)
             # Bench = everyone rostered but not started. Only ever used to break a
             # tie in a head-to-head matchup (the user's league rule); it never
@@ -608,7 +627,7 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                                      for p in rosters[t]
                                      if _norm(p["player"]) not in started), 2)
             if detail or t == our_slot:
-                rec = _lineup_record(rosters[t], proj, actual_w)
+                rec = _lineup_record(rosters[t], lineup_proj, actual_w)
                 rec.update(week=w, points=scores[t, wi], bench_points=bench[t, wi])
                 lineups[t].append(rec)
 
