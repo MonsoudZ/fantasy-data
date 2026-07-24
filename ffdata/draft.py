@@ -171,6 +171,10 @@ _SEASON_GAMES = 17    # to scale a per-game ceiling bonus up to season points
 _SLEEPER_CEIL_RANK = 24
 _SLEEPER_PROJ_RANK = 20
 _SLEEPER_GAP = 10
+# Anchor = top-12 weekly floor at his position AND a startable projection (top 24)
+# -- the genuinely set-and-forget tier, not just anyone above replacement.
+_ANCHOR_FLOOR_RANK = 12
+_ANCHOR_PROJ_RANK = 24
 
 
 def _upside_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
@@ -649,6 +653,16 @@ def draft_board(target_season: int, league: dict | None = None,
         proj["proj"] = (proj["proj"] + upside_weight * bonus).clip(lower=0).round(1)
         proj = proj.drop(columns=["u_ceiling"])
 
+    return score_board(proj, league)
+
+
+def score_board(proj: pd.DataFrame, league: dict) -> pd.DataFrame:
+    """Add VOR + auction $ to a projection frame and sort best-first.
+
+    Split out so a board can be RE-scored after its projections change -- e.g.
+    once a known-unavailable player (IR/PUP/suspended) has been marked down,
+    everyone's value over replacement shifts and has to be recomputed."""
+    proj = proj.copy()
     repl_rank = _replacement_ranks(league)
     repl_pts = {}
     for p in POSITIONS:
@@ -663,6 +677,60 @@ def draft_board(target_season: int, league: dict | None = None,
     total = pos_vor.sum() or 1
     proj["auction"] = (1 + pos_vor / total * pool).round(0).astype(int)
     return proj.sort_values("vor", ascending=False).reset_index(drop=True)
+
+
+# A known-unavailable player is worth a fraction of a healthy one FOR A DRAFT --
+# he'll miss real games. Multipliers on the season projection by current status
+# (Sleeper live feed + roster status); re-scored into VOR so his RANK drops, not
+# just a badge. Rough by design -- exact return dates aren't known -- but a player
+# on IR should never sit near his healthy value on a draft board.
+_AVAIL_PENALTY = {
+    "retired": 0.0, "released": 0.05, "an unsigned free agent": 0.4,
+    "on injured reserve": 0.35, "on PUP": 0.5, "non-football injury": 0.5,
+    "on the exempt list": 0.5, "suspended": 0.6, "holding out (did not report)": 0.65,
+    "holding out (not with team)": 0.65, "an unsigned restricted FA": 0.6,
+}
+# Sleeper live codes (freshest -- today's IR/PUP), same idea.
+_LIVE_PENALTY = {"IR": 0.35, "PUP": 0.5, "NA": 0.5, "Sus": 0.6, "DNR": 0.65, "Out": 0.9}
+
+
+def availability_penalty(board: pd.DataFrame, target_season: int,
+                         league: dict | None = None, rules: ScoringRules = PPR,
+                         con=None) -> pd.DataFrame:
+    """Mark down players who are known to be unavailable, and RE-SCORE VOR.
+
+    Reads the same availability the board already shows (roster status + Sleeper
+    live feed) and multiplies each affected player's projection by his status
+    penalty, worst-case if several apply, then recomputes VOR/auction (with
+    `league`, so replacement level is consistent) so his rank reflects the missed
+    games. Adds `avail` (the reason) for the UI. A board with no player_id or no
+    availability data comes back unchanged.
+    """
+    con = con or connect()
+    league = league or DEFAULT_LEAGUE
+    if "player_id" not in board.columns:
+        return board
+    try:
+        av = availability_context(target_season, con).set_index("player_id")
+    except Exception:  # noqa: BLE001 - availability is a bonus, never fatal
+        return board
+
+    b = board.copy()
+    factors, notes = [], []
+    for pid in b["player_id"]:
+        f, note = 1.0, None
+        if pid in av.index:
+            r = av.loc[pid]
+            status, live = r.get("status"), r.get("live_code")
+            if pd.notna(status) and status in _AVAIL_PENALTY:
+                f, note = min(f, _AVAIL_PENALTY[status]), status
+            if pd.notna(live) and live in _LIVE_PENALTY and _LIVE_PENALTY[live] < f:
+                f, note = _LIVE_PENALTY[live], f"live: {live}"
+        factors.append(f)
+        notes.append(note)
+    b["proj"] = (b["proj"] * factors).round(1)
+    b["avail"] = notes
+    return score_board(b, league)
 
 
 def board_upside(board: pd.DataFrame, target_season: int, rules: ScoringRules = PPR,
@@ -692,12 +760,20 @@ def board_upside(board: pd.DataFrame, target_season: int, rules: ScoringRules = 
     # while his projection has him as a backup -- boom potential at a discount.
     ceil_rank = b.groupby("position")["u_ceiling"].rank(ascending=False, method="min")
     proj_rank = b.groupby("position")["proj"].rank(ascending=False, method="min")
+    floor_rank = b.groupby("position")["u_floor"].rank(ascending=False, method="min")
     b["ceiling"] = b["u_ceiling"].round(1)
     b["floor"] = b["u_floor"].round(1)
     b["sleeper"] = (
         (ceil_rank <= _SLEEPER_CEIL_RANK)         # top-24 ceiling at his position
         & (proj_rank >= _SLEEPER_PROJ_RANK)        # but not already a premium pick
         & ((proj_rank - ceil_rank) >= _SLEEPER_GAP)  # ceiling clearly outranks price
+    ).fillna(False)
+    # Anchor: a top-tier weekly FLOOR at a startable projection -- he rarely gives
+    # you a zero, the set-and-forget half of "high floor with upside". A player can
+    # be both an anchor AND a sleeper (the ideal); most are one or neither.
+    b["anchor"] = (
+        (floor_rank <= _ANCHOR_FLOOR_RANK)
+        & (proj_rank <= _ANCHOR_PROJ_RANK)         # actually startable, not a fluke
     ).fillna(False)
     return b.drop(columns=["u_ceiling", "u_floor"])
 

@@ -489,3 +489,49 @@ def test_board_upside_flags_high_ceiling_at_a_backup_price():
     # ceiling/floor are exposed for the human to read.
     assert out.loc["w25", "ceiling"] > out.loc["w25", "floor"]
     assert _SLEEPER_GAP >= 1
+
+
+def test_board_upside_anchor_flags_a_high_floor_starter():
+    """The mirror of the sleeper: a top-tier weekly FLOOR at a startable
+    projection -- the reliable, set-and-forget player."""
+    import duckdb
+
+    from ffdata.draft import board_upside
+    wr = [{"player": f"WR{i}", "player_id": f"w{i}", "position": "WR",
+           "proj": 300 - i * 8, "vor": 150 - i * 8, "auction": 60 - i} for i in range(30)]
+    rows = []
+    for i in range(30):
+        # w0 is a rock: 18 every week (high, flat floor). w29 is a low scrub.
+        weekly = [18] * 10 if i == 0 else [max(1, 15 - i * 0.5)] * 10
+        for wk, y in enumerate(weekly):
+            rows.append({"player_id": f"w{i}", "season": 2024, "week": wk + 1,
+                         "position": "WR", "player_display_name": f"WR{i}",
+                         "season_type": "REG", "recent_team": "KC", "opponent_team": "LV",
+                         "receiving_yards": y * 10, "targets": 8, "carries": 0,
+                         "receptions": 0, "rushing_yards": 0, "passing_yards": 0,
+                         "passing_tds": 0, "rushing_tds": 0, "receiving_tds": 0,
+                         "target_share": 0.2})
+    con = duckdb.connect()
+    con.register("weekly", pd.DataFrame(rows))
+    out = board_upside(pd.DataFrame(wr), 2025, con=con).set_index("player_id")
+    assert out.loc["w0", "anchor"], "high floor + startable projection = anchor"
+    assert not out.loc["w29", "anchor"], "a low scrub is not an anchor"
+
+
+def test_availability_penalty_downranks_the_unavailable():
+    """A player known to be on IR / retired must be MARKED DOWN in value, not just
+    badged -- his rank should drop below a healthy peer with the same projection."""
+    from ffdata.draft import availability_penalty
+
+    board = pd.DataFrame({
+        "player": ["Healthy", "OnIR", "Retired"], "player_id": ["h", "ir", "ret"],
+        "position": ["RB", "RB", "RB"], "proj": [200.0, 200.0, 200.0]})
+    con = _inj_con([], roster=[(2026, "h", "ACT"), (2026, "ir", "RES"),
+                               (2026, "ret", "RET")])
+    out = availability_penalty(board, 2026, con=con).set_index("player_id")
+
+    assert out.loc["h", "proj"] == 200.0            # healthy untouched
+    assert out.loc["ir", "proj"] < 200.0            # IR marked down
+    assert out.loc["ret", "proj"] == 0.0            # retired -> zero value
+    assert out.loc["ir", "vor"] < out.loc["h", "vor"]   # rank reflects it
+    assert out.loc["ir", "avail"] == "on injured reserve"
