@@ -21,8 +21,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import advice
-from .draft import (DEFAULT_LEAGUE, best_available, draft_board, keeper_value,
-                    player_context, rookie_context, trade_value)
+from .draft import (DEFAULT_LEAGUE, best_available, board_upside, draft_board,
+                    keeper_value, player_context, rookie_context, trade_value)
 from .dynasty import dynasty_board
 from .features import build_features
 from .gamelines import game_forecasts
@@ -337,9 +337,17 @@ def _get_board(req: BoardRequest):
         raise ValueError("bad scoring")
     key = (req.season, req.teams, _scoring_key(req.scoring, req.rules), _lineup_key(req.lineup))
     if key not in _DRAFT:
-        _cache_put(_DRAFT, key, draft_board(
-            req.season, _league_cfg(req.teams, req.lineup),
-            rules=rules_from(req.scoring, req.rules)))
+        rules = rules_from(req.scoring, req.rules)
+        # career=True: the accuracy gain is real and this board is for a human to
+        # read, not the sim's auto-manager. Then enrich with ceiling/floor/sleeper
+        # so the upside a mean projection hides is visible on draft day.
+        board = draft_board(req.season, _league_cfg(req.teams, req.lineup),
+                            rules=rules, career=True)
+        try:
+            board = board_upside(board, req.season, rules=rules)
+        except Exception:  # noqa: BLE001 - upside is decision-support, never fatal
+            _log.exception("board_upside failed (%s)", req.season)
+        _cache_put(_DRAFT, key, board)
     return _DRAFT[key]
 
 
@@ -393,6 +401,12 @@ def api_draft(req: DraftRequest):
     for _, r in avail.iterrows():
         row = {"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
                "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
+        # Upside, for the human: his boom ceiling, his floor, and whether his
+        # ceiling outranks his projection (a buy-low sleeper).
+        if "ceiling" in r and pd.notna(r["ceiling"]):
+            row["ceiling"] = round(float(r["ceiling"]), 1)
+            row["floor"] = round(float(r["floor"]), 1) if pd.notna(r.get("floor")) else None
+            row["sleeper"] = bool(r.get("sleeper", False))
         # Every player carries the situation the projection can't see -- who's
         # ahead of him, what left the room, the scheme. Rookies additionally
         # carry draft capital, which is all their projection is built on.

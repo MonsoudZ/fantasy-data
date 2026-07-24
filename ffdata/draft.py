@@ -166,6 +166,11 @@ _CAREER_FEATS = ["c_fp_wavg", "c_ppg_wavg", "c_tgt_share_wavg", "c_games_avg",
                  "c_games_min", "c_seasons", "c_fp_trend", "c_best_fp"]
 _CAREER_DECAY = 0.6   # recency weight: the year before counts 0.6, two before 0.36...
 _SEASON_GAMES = 17    # to scale a per-game ceiling bonus up to season points
+# Sleeper = startable-tier ceiling (top-24 at position) at a backup price
+# (projected 20th+) -- his boom weeks outrank his draft cost by 10+ spots.
+_SLEEPER_CEIL_RANK = 24
+_SLEEPER_PROJ_RANK = 20
+_SLEEPER_GAP = 10
 
 
 def _upside_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
@@ -658,6 +663,43 @@ def draft_board(target_season: int, league: dict | None = None,
     total = pos_vor.sum() or 1
     proj["auction"] = (1 + pos_vor / total * pool).round(0).astype(int)
     return proj.sort_values("vor", ascending=False).reset_index(drop=True)
+
+
+def board_upside(board: pd.DataFrame, target_season: int, rules: ScoringRules = PPR,
+                 con=None) -> pd.DataFrame:
+    """Add ceiling / floor / sleeper columns to a draft board -- decision support.
+
+    The sim says folding upside into the ranking number doesn't win more leagues
+    (the variance floor swallows it), but a HUMAN drafting can use the shape a
+    mean projection hides. So show it, don't bake it in:
+
+      * ceiling -- his boom level (mean of his top-3 weekly scores last year)
+      * floor   -- his down-week level (mean of his bottom-3)
+      * sleeper -- his ceiling ranks him well ABOVE where his projection does
+                   (within position). The buy-low profile: the mean underrates
+                   his upside, so he goes later than his boom weeks deserve.
+
+    Rookies have no weekly history, so ceiling/floor are NaN and sleeper False --
+    their upside is a different animal (draft capital), flagged separately.
+    """
+    con = con or connect()
+    if "player_id" not in board.columns:      # can't join upside without an id
+        return board
+    up = _upside_features(con, rules)
+    cur = up[up["season"] == target_season - 1][["player_id", "u_ceiling", "u_floor"]]
+    b = board.merge(cur, on="player_id", how="left")
+    # Within-position ranks (1 = best). A sleeper's ceiling ranks him as a starter
+    # while his projection has him as a backup -- boom potential at a discount.
+    ceil_rank = b.groupby("position")["u_ceiling"].rank(ascending=False, method="min")
+    proj_rank = b.groupby("position")["proj"].rank(ascending=False, method="min")
+    b["ceiling"] = b["u_ceiling"].round(1)
+    b["floor"] = b["u_floor"].round(1)
+    b["sleeper"] = (
+        (ceil_rank <= _SLEEPER_CEIL_RANK)         # top-24 ceiling at his position
+        & (proj_rank >= _SLEEPER_PROJ_RANK)        # but not already a premium pick
+        & ((proj_rank - ceil_rank) >= _SLEEPER_GAP)  # ceiling clearly outranks price
+    ).fillna(False)
+    return b.drop(columns=["u_ceiling", "u_floor"])
 
 
 def best_available(board: pd.DataFrame, drafted: list[str] | None = None, position: str | None = None,

@@ -448,3 +448,44 @@ def test_upside_bonus_reranks_toward_ceiling():
     up = draft_board(2025, league, rules=STANDARD, con=con, career=True, upside_weight=0.2)
     # The boards rank differently; the upside board is not identical.
     assert list(base["player"]) != list(up["player"])
+
+
+def test_board_upside_flags_high_ceiling_at_a_backup_price():
+    """A sleeper: startable-tier weekly CEILING but a backup-tier projection --
+    boom potential going late. A stud (high ceiling AND high proj) is NOT a
+    sleeper, and a low-ceiling player never is."""
+    import duckdb
+
+    from ffdata.draft import _SLEEPER_GAP, board_upside
+
+    # Build a WR board + weekly history so _upside_features has real ceilings.
+    wr = [{"player": f"WR{i}", "player_id": f"w{i}", "position": "WR",
+           "proj": 300 - i * 8, "vor": 150 - i * 8, "auction": 60 - i} for i in range(30)]
+    board = pd.DataFrame(wr)
+    rows = []
+    for i in range(30):
+        # Player w25 is the SLEEPER: a LOW projection (ranked ~26th) but monster
+        # boom weeks (a few 40s) that give him a top-tier ceiling.
+        if i == 25:
+            weekly = [40, 42, 41, 5, 4, 5, 4, 5, 4, 5]
+        else:
+            base = max(1, 20 - i * 0.5)
+            weekly = [base] * 10
+        for wk, y in enumerate(weekly):
+            rows.append({"player_id": f"w{i}", "season": 2024, "week": wk + 1,
+                         "position": "WR", "player_display_name": f"WR{i}",
+                         "season_type": "REG", "recent_team": "KC", "opponent_team": "LV",
+                         "receiving_yards": y * 10, "targets": 8, "carries": 0,
+                         "receptions": 0, "rushing_yards": 0, "passing_yards": 0,
+                         "passing_tds": 0, "rushing_tds": 0, "receiving_tds": 0,
+                         "target_share": 0.2})
+    con = duckdb.connect()
+    con.register("weekly", pd.DataFrame(rows))
+    out = board_upside(board, 2025, con=con).set_index("player_id")
+
+    assert out.loc["w25", "sleeper"], "high-ceiling / backup-price player is a sleeper"
+    assert not out.loc["w0", "sleeper"], "the WR1 (elite proj, not underpriced) is not a sleeper"
+    assert not out.loc["w20", "sleeper"], "a low-ceiling backup is not a sleeper"
+    # ceiling/floor are exposed for the human to read.
+    assert out.loc["w25", "ceiling"] > out.loc["w25", "floor"]
+    assert _SLEEPER_GAP >= 1

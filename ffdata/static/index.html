@@ -138,6 +138,7 @@
   td { padding:9px 10px; border-bottom:1px solid rgba(42,55,99,.4); }
   td.num { font-variant-numeric:tabular-nums; font-weight:700; text-align:right; }
   tr.pos-row:hover { background:var(--card2); }
+  .gem { cursor:help; margin-left:5px; font-size:12px; vertical-align:middle; }
   .rk-badge { font-size:9px; font-weight:800; letter-spacing:.3px; color:#08122a;
     background:var(--accent2); border-radius:5px; padding:2px 5px; margin-left:6px; vertical-align:middle; }
   .rk-row td { border-bottom:0; padding-top:0; padding-bottom:9px; }
@@ -703,11 +704,21 @@ function renderBoard(){
   const rows=D.board.filter(p=>!D.drafted.has(norm(p.player)) && (D.pos==="ALL"||p.position===D.pos) && (!D.q||norm(p.player).includes(norm(D.q)))).slice(0,120);
   const head=dyn
     ? `<th>#</th><th>Player</th><th></th><th class="num">Age</th><th class="num">Proj</th><th class="num">VOR</th><th class="num">Dyn</th><th></th>`
-    : `<th>#</th><th>Player</th><th></th><th class="num">Proj</th><th class="num">VOR</th><th class="num">$</th><th></th>`;
+    : `<th>#</th><th>Player</th><th></th><th class="num">Proj</th><th class="num" title="Boom level: avg of his top-3 weeks last year">Ceil</th><th class="num">VOR</th><th class="num">$</th><th></th>`;
   const cells=p=>dyn
     ? `<td class="num">${p.age}</td><td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num" style="color:var(--good)">${p.dynasty_value.toFixed(0)}</td>`
-    : `<td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td>`;
-  const ncols = dyn ? 8 : 7;
+    : `<td class="num">${p.proj.toFixed(0)}</td><td class="num" style="color:${p.ceiling!=null?'var(--warn)':'var(--muted)'}">${p.ceiling!=null?p.ceiling.toFixed(0):'—'}</td><td class="num" style="color:var(--accent2)">${p.vor.toFixed(0)}</td><td class="num">$${p.auction}</td>`;
+  const ncols = dyn ? 8 : 8;
+  // A 💎 marks a SLEEPER: his weekly ceiling ranks him as a startable player, but
+  // his projection has him going as a backup -- boom potential at a discount.
+  const gemBadge = p => {
+    if(!p.sleeper) return "";
+    const body = `<div class="t-hd">💎 Sleeper — buy-low upside</div><div class="t-sub">`
+      + `Ceiling <b>${p.ceiling!=null?p.ceiling.toFixed(0):'?'}</b> pts (his top weeks) with a `
+      + `floor of <b>${p.floor!=null?p.floor.toFixed(0):'?'}</b>. His boom weeks rank him as a `
+      + `starter, but his projection has him going late — the kind of pick that wins leagues if it hits.</div>`;
+    return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">💎</span>`;
+  };
   // Rookies get a second row: the situation the projection can't see. Draft
   // capital is all the model knows, so show who's ahead and whether the offense
   // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
@@ -776,7 +787,7 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${gemBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";
