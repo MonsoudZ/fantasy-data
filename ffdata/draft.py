@@ -165,6 +165,58 @@ def _sos(con, rules: ScoringRules = PPR) -> pd.DataFrame:
 _CAREER_FEATS = ["c_fp_wavg", "c_ppg_wavg", "c_tgt_share_wavg", "c_games_avg",
                  "c_games_min", "c_seasons", "c_fp_trend", "c_best_fp"]
 _CAREER_DECAY = 0.6   # recency weight: the year before counts 0.6, two before 0.36...
+_SEASON_GAMES = 17    # to scale a per-game ceiling bonus up to season points
+
+
+def _upside_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+    """Per (player_id, season): the SHAPE of a player's weeks, not just the total.
+
+    A season projection is a mean -- it can't tell a steady 12-a-week back from
+    one who goes 4, 4, 30, 4, 28. Titles come from the boom weeks, so measure them
+    (all leak-free, recency-weighted over seasons <= S):
+
+      * u_ceiling  -- his boom level: the mean of his top-3 weekly scores
+      * u_boom     -- how OFTEN he explodes: share of games >= 1.5x his own weekly
+                      average (a real spike, not just a good day)
+      * u_floor    -- his consistency: the mean of his BOTTOM-3 weekly scores; a
+                      high floor here is the "reliable" half of the profile
+      * u_stdev    -- week-to-week volatility (boom/bust reads high)
+
+    Kept separate from the career MEAN so a ranking can reward high floor WITH
+    upside rather than either alone -- see the sim test for whether it wins.
+    """
+    wk = con.sql("""
+        select * from weekly
+        where season_type = 'REG' and position in ('QB','RB','WR','TE')
+    """).df()
+    wk = score(wk, rules, col="fp")
+    per = []
+    for (pid, s), g in wk.groupby(["player_id", "season"], sort=False):
+        fps = np.sort(g["fp"].to_numpy())[::-1]          # high -> low
+        mean = float(fps.mean()) if len(fps) else 0.0
+        top3 = float(fps[:3].mean()) if len(fps) else 0.0
+        bot3 = float(fps[-3:].mean()) if len(fps) else 0.0
+        boom = float((g["fp"] >= 1.5 * mean).mean()) if mean > 0 else 0.0
+        std = float(g["fp"].std(ddof=0)) if len(fps) > 1 else 0.0
+        per.append({"player_id": pid, "season": int(s), "_ceiling": top3,
+                    "_floor": bot3, "_boom": boom, "_std": std})
+    pdf = pd.DataFrame(per).sort_values(["player_id", "season"])
+
+    out = []
+    for pid, g in pdf.groupby("player_id", sort=False):
+        g = g.reset_index(drop=True)
+        seasons = g["season"].to_numpy()
+        for i in range(len(g)):
+            w = _CAREER_DECAY ** (seasons[i] - seasons[: i + 1])
+            w = w / w.sum()
+            out.append({
+                "player_id": pid, "season": int(seasons[i]),
+                "u_ceiling": float((g["_ceiling"].to_numpy()[: i + 1] * w).sum()),
+                "u_floor": float((g["_floor"].to_numpy()[: i + 1] * w).sum()),
+                "u_boom": float((g["_boom"].to_numpy()[: i + 1] * w).sum()),
+                "u_stdev": float((g["_std"].to_numpy()[: i + 1] * w).sum()),
+            })
+    return pd.DataFrame(out)
 
 
 def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
@@ -547,7 +599,8 @@ def _replacement_ranks(league: dict) -> dict:
 
 def draft_board(target_season: int, league: dict | None = None,
                 rules: ScoringRules = PPR, include_rookies: bool = True,
-                con=None, rookie_discount: float = 1.0, career: bool = False) -> pd.DataFrame:
+                con=None, rookie_discount: float = 1.0, career: bool = False,
+                upside_weight: float = 0.0) -> pd.DataFrame:
     """Ranked draft board: season projection, VOR, and auction dollar value.
 
     `rules` sets the league scoring (default PPR); VOR and auction $ follow from
@@ -575,8 +628,23 @@ def draft_board(target_season: int, league: dict | None = None,
                     .drop_duplicates(subset="player_id", keep="first"))
     if proj.empty:
         return proj
-    repl_rank = _replacement_ranks(league)
     proj = proj.copy()
+
+    # Upside bonus: reward players whose weekly CEILING sits above their position's
+    # median, on top of the accurate (career) mean projection. A boom potential
+    # bonus, not a replacement for the floor -- a high-mean player who also booms
+    # gets the biggest lift; a low-mean boom/bust starts from a low base. Titles
+    # need ceiling the mean can't see; `upside_weight` is tuned by the sim.
+    if upside_weight:
+        up = _upside_features(con, rules)
+        cur = up[up["season"] == target_season - 1][["player_id", "u_ceiling"]]
+        proj = proj.merge(cur, on="player_id", how="left")
+        med = proj.groupby("position")["u_ceiling"].transform("median")
+        bonus = (proj["u_ceiling"] - med).fillna(0.0) * _SEASON_GAMES
+        proj["proj"] = (proj["proj"] + upside_weight * bonus).clip(lower=0).round(1)
+        proj = proj.drop(columns=["u_ceiling"])
+
+    repl_rank = _replacement_ranks(league)
     repl_pts = {}
     for p in POSITIONS:
         pos = proj[proj["position"] == p].sort_values("proj", ascending=False).reset_index(drop=True)

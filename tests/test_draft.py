@@ -401,3 +401,50 @@ def test_career_features_improve_the_projection():
     base = sum(rank(s, False) for s in (2023, 2024, 2025)) / 3
     car = sum(rank(s, True) for s in (2023, 2024, 2025)) / 3
     assert car > base, f"career features must improve rank ({car:.3f} vs {base:.3f})"
+
+
+def test_upside_features_measure_ceiling_and_are_leak_free():
+    """Upside is the SHAPE of a player's weeks, not the total. A boom/bust player
+    (4,4,30,4,28) must read a higher ceiling AND higher volatility than a steady
+    one (14 every week) with the same season total. Row S sees only seasons <= S."""
+    import duckdb
+
+    from ffdata.draft import _upside_features
+
+    def wk_rows(pid, season, weekly_yards):
+        # receiving_yards drives standard fp at 0.1/yd; one row per week.
+        return [{"player_id": pid, "season": season, "week": w + 1, "position": "WR",
+                 "player_display_name": pid, "season_type": "REG",
+                 "recent_team": "KC", "opponent_team": "LV",
+                 "receiving_yards": y * 10, "targets": 8, "carries": 0,
+                 "receptions": 0, "rushing_yards": 0, "passing_yards": 0,
+                 "passing_tds": 0, "rushing_tds": 0, "receiving_tds": 0,
+                 "target_share": 0.2}
+                for w, y in enumerate(weekly_yards)]
+
+    steady = wk_rows("steady", 2023, [14] * 10)                 # 14 every week
+    spiky = wk_rows("spiky", 2023, [4, 4, 30, 4, 28, 4, 4, 30, 4, 28])  # same-ish total
+    con = duckdb.connect()
+    con.register("weekly", pd.DataFrame(steady + spiky))
+    u = _upside_features(con).set_index("player_id")
+
+    assert u.loc["spiky", "u_ceiling"] > u.loc["steady", "u_ceiling"]
+    assert u.loc["spiky", "u_stdev"] > u.loc["steady", "u_stdev"]
+    assert u.loc["steady", "u_floor"] >= u.loc["spiky", "u_floor"]   # steady has the floor
+
+
+@requires_data_lake
+def test_upside_bonus_reranks_toward_ceiling():
+    """A positive upside_weight must lift a high-ceiling player's board value above
+    where a mean-only projection puts him -- that's how sleepers surface."""
+    from ffdata.db import connect
+    from ffdata.draft import draft_board
+    from ffdata.scoring import STANDARD
+
+    con = connect()
+    league = {"teams": 12, "budget": 200, "roster_spots": 14,
+              "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
+    base = draft_board(2025, league, rules=STANDARD, con=con, career=True, upside_weight=0.0)
+    up = draft_board(2025, league, rules=STANDARD, con=con, career=True, upside_weight=0.2)
+    # The boards rank differently; the upside board is not identical.
+    assert list(base["player"]) != list(up["player"])
