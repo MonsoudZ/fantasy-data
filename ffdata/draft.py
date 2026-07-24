@@ -158,9 +158,59 @@ def _sos(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     return sos.rename(columns={"allowed": "sos"})
 
 
-def _feature_frame(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+# Multi-year career + durability features, all computed from seasons <= S (the
+# "from" season) so they're leak-free for the S+1 target. Added on top of the
+# single-prior-year _FEATS; kept behind a flag so their effect is MEASURED, not
+# assumed (see career_backtest / the sim sweep).
+_CAREER_FEATS = ["c_fp_wavg", "c_ppg_wavg", "c_tgt_share_wavg", "c_games_avg",
+                 "c_games_min", "c_seasons", "c_fp_trend", "c_best_fp"]
+_CAREER_DECAY = 0.6   # recency weight: the year before counts 0.6, two before 0.36...
+
+
+def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+    """Per (player_id, season): a recency-weighted view of his career THROUGH that
+    season, plus durability. Leak-free -- only seasons <= S feed row S.
+
+      * c_fp_wavg / c_ppg_wavg / c_tgt_share_wavg -- career form, recent-weighted
+      * c_games_avg / c_games_min -- durability (a 17-game/yr back is not an
+        11-game/yr back with the same per-game rate)
+      * c_seasons -- how much track record there is (a 1-yr wonder vs a proven vet)
+      * c_fp_trend -- last season minus the one before (rising / declining)
+      * c_best_fp -- career-best season (ceiling the single prior year can miss)
+    """
+    agg = _season_agg(con, rules).sort_values(["player_id", "season"])
+    agg["ppg"] = agg["fp"] / agg["games"].clip(lower=1)
+    out = []
+    for pid, g in agg.groupby("player_id", sort=False):
+        g = g.reset_index(drop=True)
+        seasons = g["season"].to_numpy()
+        fp, ppg = g["fp"].to_numpy(), g["ppg"].to_numpy()
+        games = g["games"].to_numpy()
+        tgt = g["tgt_share"].fillna(0.0).to_numpy()
+        for i in range(len(g)):
+            s = seasons[i]
+            w = _CAREER_DECAY ** (s - seasons[: i + 1])     # most recent -> weight 1
+            w = w / w.sum()
+            out.append({
+                "player_id": pid, "season": int(s),
+                "c_fp_wavg": float((fp[: i + 1] * w).sum()),
+                "c_ppg_wavg": float((ppg[: i + 1] * w).sum()),
+                "c_tgt_share_wavg": float((tgt[: i + 1] * w).sum()),
+                "c_games_avg": float(games[: i + 1].mean()),
+                "c_games_min": float(games[: i + 1].min()),
+                "c_seasons": i + 1,
+                "c_fp_trend": float(fp[i] - fp[i - 1]) if i else 0.0,
+                "c_best_fp": float(fp[: i + 1].max()),
+            })
+    return pd.DataFrame(out)
+
+
+def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False) -> pd.DataFrame:
     """Feature rows: prior-season aggregates (S) + preseason context at S+1 ->
-    target = fp at S+1. Target is NaN for the not-yet-played season."""
+    target = fp at S+1. Target is NaN for the not-yet-played season.
+
+    `career=True` merges the leak-free multi-year career + durability features.
+    """
     agg = _season_agg(con, rules)
     ts, coach, sos = _team_season(con), _team_coach(con), _sos(con, rules)
     feat = agg.rename(columns={
@@ -195,10 +245,15 @@ def _feature_frame(con, rules: ScoringRules = PPR) -> pd.DataFrame:
 
     for p in POSITIONS:
         df[f"is_{p}"] = (df["position"] == p).astype(int)
+
+    if career:
+        cf = _career_features(con, rules)
+        df = df.merge(cf, on=["player_id", "season"], how="left")
     return df
 
 
-def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> pd.DataFrame:
+def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
+                   career: bool = False) -> pd.DataFrame:
     """Project every returning player's total points for `target_season`.
 
     Trains on pairs whose target season is strictly before `target_season`
@@ -206,13 +261,14 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None) -> p
     sets the scoring the projection is expressed in (default PPR).
     """
     con = con or connect()
-    df = _feature_frame(con, rules)
+    df = _feature_frame(con, rules, career=career)
+    feats = _FEATS + (_CAREER_FEATS if career else [])
     train = df[(df["tseason"] < target_season) & df["target_fp"].notna()]
     test = df[df["tseason"] == target_season].copy()
     if test.empty:
         return test
-    model = lgb.LGBMRegressor(**_PARAMS).fit(train[_FEATS], train["target_fp"])
-    model_pts = np.clip(model.predict(test[_FEATS]), 0, None)
+    model = lgb.LGBMRegressor(**_PARAMS).fit(train[feats], train["target_fp"])
+    model_pts = np.clip(model.predict(test[feats]), 0, None)
     # Blend with prior-season total (both are season-point scale).
     test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * test["p_fp"]).clip(lower=0).round(1)
     return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
@@ -491,7 +547,7 @@ def _replacement_ranks(league: dict) -> dict:
 
 def draft_board(target_season: int, league: dict | None = None,
                 rules: ScoringRules = PPR, include_rookies: bool = True,
-                con=None, rookie_discount: float = 1.0) -> pd.DataFrame:
+                con=None, rookie_discount: float = 1.0, career: bool = False) -> pd.DataFrame:
     """Ranked draft board: season projection, VOR, and auction dollar value.
 
     `rules` sets the league scoring (default PPR); VOR and auction $ follow from
@@ -508,7 +564,7 @@ def draft_board(target_season: int, league: dict | None = None,
     """
     league = league or DEFAULT_LEAGUE
     con = con or connect()
-    proj = project_season(target_season, rules=rules, con=con)
+    proj = project_season(target_season, rules=rules, con=con, career=career)
     if include_rookies:
         rookies = rookie_projection(target_season, rules=rules, con=con)
         if rookies is not None and not rookies.empty:

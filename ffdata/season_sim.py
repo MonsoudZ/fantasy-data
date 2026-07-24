@@ -348,8 +348,8 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
 
 
 def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
-                 con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT
-                 ) -> tuple[list[dict], list[dict]]:
+                 con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT,
+                 career: bool = True) -> tuple[list[dict], list[dict]]:
     """(our board, the naive opponents' board) -- preseason only, no projector.
 
     Split out of `prepare` because it costs seconds while fitting the weekly
@@ -366,7 +366,7 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     league = {"teams": n_teams, "budget": 200, "roster_spots": ROSTER_SIZE,
               "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
     board = draft_board(season, league, rules=rules, con=con,
-                        rookie_discount=rookie_discount)
+                        rookie_discount=rookie_discount, career=career)
     kdst = _preseason_kdst(con, season, rules)
     # Keep VOR and auction $ on each record -- they ARE the reason a VOR draft
     # takes a player (highest value over replacement still available), so the

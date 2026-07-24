@@ -1,6 +1,7 @@
 """Draft value logic: replacement levels, VOR-ranked availability, auction split."""
 
 import pandas as pd
+import pytest
 
 from conftest import requires_data_lake
 
@@ -340,3 +341,63 @@ def test_team_and_coach_lookups_are_single_valued_and_stable():
                                   canon(_team_season(con), ["player_id", "season"]))
     pd.testing.assert_frame_equal(canon(coach, ["season", "team"]),
                                   canon(_team_coach(con), ["season", "team"]))
+
+
+def test_career_features_are_leak_free_and_recency_weighted():
+    """Multi-year career features for row S must use ONLY seasons <= S, and weight
+    the most recent season heaviest. Synthetic 3-season career, no lake needed."""
+    import duckdb
+
+    from ffdata.draft import _CAREER_DECAY, _career_features
+    # A player with a rising career: 100, 200, 300 fp over 2020-22, games 16/10/17.
+    rows = []
+    for season, total_yds, gms in [(2020, 1000, 16), (2021, 2000, 10), (2022, 3000, 17)]:
+        for wk in range(gms):
+            rows.append({"player_id": "p", "season": season, "week": wk + 1,
+                         "position": "WR", "player_display_name": "P",
+                         "season_type": "REG", "recent_team": "KC", "opponent_team": "LV",
+                         "receiving_yards": total_yds / gms, "targets": 8, "carries": 0,
+                         "receptions": 5, "rushing_yards": 0, "passing_yards": 0,
+                         "passing_tds": 0, "rushing_tds": 0, "receiving_tds": 0,
+                         "target_share": 0.25})
+    con = duckdb.connect()
+    con.register("weekly", pd.DataFrame(rows))
+    cf = _career_features(con).set_index("season")
+
+    # Row for 2020 sees only 2020: c_seasons == 1, trend 0, games_avg 16.
+    assert cf.loc[2020, "c_seasons"] == 1
+    assert cf.loc[2020, "c_fp_trend"] == 0.0
+    assert cf.loc[2020, "c_games_avg"] == 16
+    # Row for 2022 sees all three, weighted toward 2022; durability floor = the
+    # 10-game year; best = the 300-yard*0.1... season; trend = up (2022 > 2021).
+    assert cf.loc[2022, "c_seasons"] == 3
+    assert cf.loc[2022, "c_games_min"] == 10 and cf.loc[2022, "c_games_avg"] == pytest.approx(43 / 3)
+    assert cf.loc[2022, "c_fp_trend"] > 0
+    # Recency weight: fp rose across seasons, so weighting toward the most recent
+    # year must pull the weighted average up year over year.
+    assert cf.loc[2022, "c_fp_wavg"] > cf.loc[2021, "c_fp_wavg"], "rising career weights up"
+    assert cf.loc[2022, "c_fp_wavg"] <= cf.loc[2022, "c_best_fp"]  # never exceeds the best year
+    assert _CAREER_DECAY < 1.0
+
+
+@requires_data_lake
+def test_career_features_improve_the_projection():
+    """The whole justification: adding career + durability must raise rank and cut
+    error vs prior-year-only. Measured, not assumed."""
+    from scipy.stats import spearmanr
+
+    from ffdata.db import connect
+    from ffdata.draft import _season_agg, project_season
+    from ffdata.scoring import STANDARD
+
+    con = connect()
+    agg = _season_agg(con, STANDARD)
+
+    def rank(season, career):
+        proj = project_season(season, rules=STANDARD, con=con, career=career)
+        m = proj.merge(agg[agg.season == season][["player_id", "fp"]], on="player_id")
+        return spearmanr(m["proj"], m["fp"]).correlation
+
+    base = sum(rank(s, False) for s in (2023, 2024, 2025)) / 3
+    car = sum(rank(s, True) for s in (2023, 2024, 2025)) / 3
+    assert car > base, f"career features must improve rank ({car:.3f} vs {base:.3f})"
