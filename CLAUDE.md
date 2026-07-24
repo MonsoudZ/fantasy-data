@@ -241,6 +241,23 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   ceiling off 4 games) — a mechanical auto-manager can't exploit a sleeper the way
   a drafter does, so the right home is a board VIEW (accuracy + a ceiling/sleeper
   column), not an auto-applied weight.
+- **Schedule-adjusting PRIOR production does NOT help projection**
+  (`draft._schedule_features`, `_SCHEDULE_FEATS`, `schedule=` flag, default OFF).
+  Neutralises a player's season-S points by the strength of the defenses he
+  actually faced that year (leak-free: season-S defensive fp-allowed → per-position
+  difficulty multiplier → `sched_faced` = mean difficulty faced, `p_fp_adj` =
+  points divided by it). Also swaps the 0.6 blend anchor to `p_fp_adj` when on.
+  Backtest 2022-25 out-of-sample, standard, players ≥20 fp — rank corr / MAE:
+  baseline **0.650 / 42.9**, +schedule **0.648 / 42.8** (rank slightly *worse*),
+  +career 0.666 / 42.2, +career+schedule 0.665 / 42.0 (identical to career; MAE
+  −0.2 is noise). Why it fails: at the SEASON level `sched_faced` regresses to
+  ~1.0 for every full-time starter (Drake Maye's "easiest schedule ever" 2025
+  reads **1.04**), and the only extreme values are small-sample backups
+  (Stidham 1.43 off ~1 game). Last year's schedule difficulty doesn't carry to
+  next year — a player faces a *different* schedule. Code kept behind the default-
+  OFF flag; **revisit only if fed NEXT year's actual 2026 schedule** (the
+  strength-of-schedule the drafter cares about), not last year's, which needs the
+  2026 opponent-strength estimate we don't have preseason.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (best OTHER
   player at his position, by last year's points; empty = leads the room),

@@ -228,6 +228,46 @@ def _upside_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+# Schedule-adjusted prior production: a player's raw last-year points are inflated
+# or deflated by the defenses he happened to face. Neutralise them, leak-free (his
+# real season-S opponents + their season-S defensive strength -> project S+1).
+_SCHEDULE_FEATS = ["sched_faced", "p_fp_adj"]
+
+
+def _schedule_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
+    """Per (player_id, season): how hard a schedule he faced, and his points
+    NEUTRALISED for it.
+
+      * sched_faced -- average difficulty of the defenses he played, where 1.0 is
+        league-average, >1 = he faced EASY defenses (they allowed a lot to his
+        position), <1 = tough. Drake Maye's cakewalk 2025 reads well above 1.
+      * p_fp_adj    -- his season points divided by that difficulty: what he'd have
+        scored against an average slate. Easy-schedule production gets marked down,
+        tough-schedule production marked up.
+
+    Leak-free: uses only season-S games and season-S defenses to describe season S.
+    """
+    wk = con.sql("""
+        select * from weekly
+        where season_type = 'REG' and position in ('QB','RB','WR','TE')
+    """).df()
+    wk = score(wk, rules, col="fp")
+    # Points each defense allowed to each position that season = matchup difficulty.
+    allowed = (wk.groupby(["season", "position", "opponent_team"], as_index=False)["fp"]
+               .sum().rename(columns={"opponent_team": "def_team", "fp": "allowed"}))
+    allowed["lg_mean"] = allowed.groupby(["season", "position"])["allowed"].transform("mean")
+    allowed["difficulty"] = allowed["allowed"] / allowed["lg_mean"].clip(lower=1.0)
+
+    m = wk.merge(allowed[["season", "position", "def_team", "difficulty"]],
+                 left_on=["season", "position", "opponent_team"],
+                 right_on=["season", "position", "def_team"], how="left")
+    g = (m.groupby(["player_id", "season"], as_index=False)
+         .agg(sched_faced=("difficulty", "mean"), p_fp=("fp", "sum")))
+    g["sched_faced"] = g["sched_faced"].fillna(1.0)
+    g["p_fp_adj"] = (g["p_fp"] / g["sched_faced"].clip(lower=0.3)).round(1)
+    return g[["player_id", "season", "sched_faced", "p_fp_adj"]]
+
+
 def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     """Per (player_id, season): a recency-weighted view of his career THROUGH that
     season, plus durability. Leak-free -- only seasons <= S feed row S.
@@ -266,11 +306,13 @@ def _career_features(con, rules: ScoringRules = PPR) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False) -> pd.DataFrame:
+def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False,
+                   schedule: bool = False) -> pd.DataFrame:
     """Feature rows: prior-season aggregates (S) + preseason context at S+1 ->
     target = fp at S+1. Target is NaN for the not-yet-played season.
 
-    `career=True` merges the leak-free multi-year career + durability features.
+    `career=True` merges the leak-free multi-year career + durability features;
+    `schedule=True` merges schedule-adjusted prior production.
     """
     agg = _season_agg(con, rules)
     ts, coach, sos = _team_season(con), _team_coach(con), _sos(con, rules)
@@ -310,11 +352,16 @@ def _feature_frame(con, rules: ScoringRules = PPR, career: bool = False) -> pd.D
     if career:
         cf = _career_features(con, rules)
         df = df.merge(cf, on=["player_id", "season"], how="left")
+    if schedule:
+        sf = _schedule_features(con, rules)
+        df = df.merge(sf, on=["player_id", "season"], how="left")
+        df["sched_faced"] = df["sched_faced"].fillna(1.0)
+        df["p_fp_adj"] = df["p_fp_adj"].fillna(df["p_fp"])
     return df
 
 
 def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
-                   career: bool = False) -> pd.DataFrame:
+                   career: bool = False, schedule: bool = False) -> pd.DataFrame:
     """Project every returning player's total points for `target_season`.
 
     Trains on pairs whose target season is strictly before `target_season`
@@ -322,16 +369,18 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
     sets the scoring the projection is expressed in (default PPR).
     """
     con = con or connect()
-    df = _feature_frame(con, rules, career=career)
-    feats = _FEATS + (_CAREER_FEATS if career else [])
+    df = _feature_frame(con, rules, career=career, schedule=schedule)
+    feats = _FEATS + (_CAREER_FEATS if career else []) + (_SCHEDULE_FEATS if schedule else [])
     train = df[(df["tseason"] < target_season) & df["target_fp"].notna()]
     test = df[df["tseason"] == target_season].copy()
     if test.empty:
         return test
     model = lgb.LGBMRegressor(**_PARAMS).fit(train[feats], train["target_fp"])
     model_pts = np.clip(model.predict(test[feats]), 0, None)
-    # Blend with prior-season total (both are season-point scale).
-    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * test["p_fp"]).clip(lower=0).round(1)
+    # Blend with prior-season total -- schedule-ADJUSTED when available, so the
+    # 0.6 anchor stops rewarding easy-schedule production. Both are point-scale.
+    anchor = test["p_fp_adj"] if schedule else test["p_fp"]
+    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * anchor).clip(lower=0).round(1)
     return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
 
 
