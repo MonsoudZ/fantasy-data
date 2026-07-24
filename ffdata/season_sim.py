@@ -43,7 +43,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .backtest_draft import _naive_board, round_robin, run_snake_draft
+from .backtest_draft import _naive_board, round_robin
 from .db import connect
 from .kdst import build_dst, build_kicker, project_kdst, score_dst, score_kicker
 from .optimize import _ELIGIBLE, _norm
@@ -403,6 +403,73 @@ def prepare(season: int, rules: ScoringRules = STANDARD, projector: str = "gbm",
             "by_week": by_week, "season": season, "rules": rules, "n_teams": n_teams}
 
 
+# Starting lineup this league fields, for roster-aware drafting.
+_STARTER_NEED = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
+_FLEX_POS = ("RB", "WR", "TE")
+# How much a bench-depth pick is discounted vs one that fills a starting slot.
+# Below 1 makes the draft fill its 2RB/2WR/1TE/FLEX/QB/K/DEF starters before
+# hoarding a 4th RB -- which is how you avoid an elite-RB / scrap-WR roster.
+BENCH_DISCOUNT = 0.5
+
+
+def _need_factor(position: str, counts: dict) -> float:
+    """1.0 if this player would fill an open STARTING slot, else BENCH_DISCOUNT.
+
+    A player fills a dedicated slot while his position is short of its starter
+    count (RB<2, WR<2, TE<1, ...); once those are full he can still fill the one
+    FLEX (RB/WR/TE) if it's open; beyond that he's bench depth and gets discounted
+    so the draft pivots to a position that still needs a starter.
+    """
+    have = counts.get(position, 0)
+    if have < _STARTER_NEED.get(position, 0):
+        return 1.0
+    if position in _FLEX_POS:
+        flex_used = sum(max(0, counts.get(p, 0) - _STARTER_NEED[p]) for p in _FLEX_POS)
+        if flex_used < 1:                     # the single flex is still open
+            return 1.0
+    return BENCH_DISCOUNT
+
+
+def _roster_aware_draft(boards, need_aware, rounds, limits):
+    """Snake draft where `need_aware` teams weight VOR by open starting slots.
+
+    Non-need-aware teams take the best available on their (pre-sorted) board, as
+    before. A need-aware team re-ranks each pick by VOR x `_need_factor`, so a 4th
+    RB (bench) yields to an elite WR filling an empty WR slot.
+    """
+    from .backtest_draft import snake_order
+    n = len(boards)
+    taken: set[str] = set()
+    counts = [{} for _ in range(n)]
+    rosters: list[list[dict]] = [[] for _ in range(n)]
+    for team in snake_order(n, rounds):
+        pick = None
+        if team in need_aware:
+            best_val = -1e18
+            for p in boards[team]:
+                k = _norm(p["player"])
+                pos = p["position"]
+                if k in taken or counts[team].get(pos, 0) >= limits.get(pos, 99):
+                    continue
+                # K/DEF have no VOR and belong last; force them behind skill depth.
+                base = -1e6 if pos in ("K", "DEF") else p.get("vor", 0.0)
+                val = base * _need_factor(pos, counts[team])
+                if val > best_val:
+                    best_val, pick = val, p
+        else:
+            for p in boards[team]:
+                k = _norm(p["player"])
+                if k not in taken and counts[team].get(p["position"], 0) < limits.get(p["position"], 99):
+                    pick = p
+                    break
+        if pick is None:
+            continue
+        taken.add(_norm(pick["player"]))
+        counts[team][pick["position"]] = counts[team].get(pick["position"], 0) + 1
+        rosters[team].append(pick)
+    return rosters
+
+
 def _jitter(name: str, team: int, scale: float) -> float:
     """Deterministic per-team noise on a player's draft value, in [-scale, scale].
 
@@ -546,7 +613,12 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
 
     log(f"Snake draft: {n_teams} teams x {ROSTER_SIZE} rounds, we pick at slot {our_slot + 1}")
     boards = _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise)
-    rosters = run_snake_draft(boards, ROSTER_SIZE, LIMITS)
+    # We draft to roster need (fill 2RB/2WR/1TE/FLEX/QB/K/DEF starters before
+    # bench depth), so we don't hoard RBs and end up with scrap WRs. A sharp field
+    # drafts the same way (competent managers balance); the naive field keeps its
+    # defining flaw -- raw-points greed that hoards QBs.
+    need_aware = set(range(n_teams)) if opponent == "sharp" else {our_slot}
+    rosters = _roster_aware_draft(boards, need_aware, ROSTER_SIZE, LIMITS)
     drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
     # Preseason per-week fallback, from the (leak-free) draft board. The weekly

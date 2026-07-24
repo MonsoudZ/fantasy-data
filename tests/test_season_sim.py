@@ -429,8 +429,53 @@ def test_lineup_discount_seeds_unproven_rookies_below_veterans():
     # The rule the loop applies: seeded (prior-only) player value * discount.
     wk_proj = {"veteran wr": 9.0}                 # a real projection this week
     prior = {"rookie wr": 12.0}                   # seeded, no games yet
-    proj = dict(wk_proj); proj.update({k: v for k, v in prior.items()})
+    proj = dict(wk_proj)
+    proj.update(dict(prior))
     seeded = set(proj) - set(wk_proj)
     lineup = {k: (v * ROOKIE_START_DISCOUNT if k in seeded else v) for k, v in proj.items()}
     assert lineup["rookie wr"] == 12.0 * ROOKIE_START_DISCOUNT
     assert lineup["rookie wr"] < lineup["veteran wr"], "veteran starts ahead of the rookie"
+
+
+def test_need_factor_pivots_once_starters_are_full():
+    """Roster-aware drafting: a position is full value while it needs a starter,
+    then discounted so the draft fills empty slots instead of hoarding depth."""
+    from ffdata.season_sim import BENCH_DISCOUNT, _need_factor
+
+    assert _need_factor("RB", {}) == 1.0                    # RB1 needed
+    assert _need_factor("RB", {"RB": 1}) == 1.0             # RB2 needed
+    assert _need_factor("RB", {"RB": 2}) == 1.0             # RB3 -> fills the FLEX
+    assert _need_factor("RB", {"RB": 3}) == BENCH_DISCOUNT  # flex used -> bench
+    # A WR is still a starter need even when RB is stacked -- that's the pivot.
+    assert _need_factor("WR", {"RB": 3, "WR": 0}) == 1.0
+    assert _need_factor("TE", {"TE": 1, "RB": 2, "WR": 2}) == 1.0   # fills the flex
+    assert _need_factor("TE", {"TE": 2, "RB": 2, "WR": 2}) == BENCH_DISCOUNT  # flex used
+
+
+def test_roster_aware_draft_fills_a_balanced_starting_lineup():
+    """A pure-VOR draft hoards the highest-value position (RB) and ends with scrap
+    WRs. Roster-aware drafting must field 2 RB + 2 WR + 1 TE + a flex."""
+    import collections
+
+    from ffdata.season_sim import _roster_aware_draft
+    # One team's board: RBs are top VOR, then WRs, then TEs/QB/K/DEF.
+    # Deep enough for two teams x 14 rounds (28 picks). Distinct ALPHABETIC names
+    # per position -- `_norm` strips digits, so "RB1"/"RB2" would collide into one.
+    W = "alpha bravo charlie delta echo foxtrot golf hotel india juliet".split()
+    def named(pos, n, base):
+        return [{"player": f"{pos} {W[i]}", "position": pos, "vor": base - i} for i in range(n)]
+    def board():
+        b = named("RB", 10, 100) + named("WR", 10, 80) + named("TE", 6, 60) + named("QB", 6, 50)
+        b += [{"player": f"K {W[i]}", "position": "K", "proj": 100} for i in range(4)]
+        b += [{"player": f"DEF {W[i]}", "position": "DEF", "proj": 50} for i in range(4)]
+        return b
+
+    rosters = _roster_aware_draft([board() for _ in range(2)], {0}, 14,
+                                  {"QB": 2, "RB": 4, "WR": 4, "TE": 2, "K": 1, "DEF": 1})
+    got = collections.Counter(p["position"] for p in rosters[0])
+    # Must be able to start 2 RB, 2 WR, 1 TE, 1 flex, QB, K, DEF.
+    assert got["RB"] >= 2 and got["WR"] >= 2 and got["TE"] >= 1
+    assert got["QB"] >= 1 and got["K"] == 1 and got["DEF"] == 1
+    # The whole point: it did NOT hoard RBs and skip WR -- at least 2 real WRs.
+    names = [p["player"] for p in rosters[0]]
+    assert sum(n.startswith("WR ") for n in names) >= 2
