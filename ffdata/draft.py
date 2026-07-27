@@ -565,9 +565,20 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
         return test
     model = lgb.LGBMRegressor(**_PARAMS).fit(train[feats], train["target_fp"])
     model_pts = np.clip(model.predict(test[feats]), 0, None)
-    # Blend with prior-season total -- schedule-ADJUSTED when available, so the
-    # 0.6 anchor stops rewarding easy-schedule production. Both are point-scale.
-    anchor = test["p_fp_adj"] if schedule else test["p_fp"]
+    # Blend with a prior-season anchor. Raw season POINTS undercount anyone who
+    # missed games -- a 4-game injured star reads as a low-volume scrub (Nabers:
+    # 271 yds -> buried). When career features are on, anchor on his PER-GAME rate
+    # times his career-typical games instead (games-normalized), so an injury year
+    # is read as a rate, not a ceiling. Measured +0.013 rank / -1.1 MAE overall and
+    # most on the injured subset. Durability-capped (8-17): naive x17 over-projects
+    # the chronically fragile. Falls back to raw points without career features
+    # (and to schedule-adjusted points when that flag is on).
+    if "c_games_avg" in test.columns:
+        ppg = test["p_fp"] / test["p_games"].clip(lower=1)
+        g_exp = test["c_games_avg"].fillna(test["p_games"]).clip(lower=8, upper=17)
+        anchor = ppg * g_exp
+    else:
+        anchor = test["p_fp_adj"] if schedule else test["p_fp"]
     test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * anchor).clip(lower=0).round(1)
     return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
 

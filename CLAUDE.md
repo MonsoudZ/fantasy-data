@@ -436,6 +436,25 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   in the season SIM (career improved projection yet LOST the sim, so "better
   projection" ≠ "more titles" until swept) — flag default-off, on for the human
   board only. **Open: run the sim sweep on reconcile.**
+- **Games-normalized blend anchor — recover injured-season stars, regress the
+  injury-prone** (`project_season`, active whenever career features are on = the
+  realistic default). The 0.6 blend anchor was raw prior-season POINTS, so a star
+  who missed half the year read as a low-volume scrub — the ADP gap flagged it
+  (Malik Nabers: 4 games / 271 yds → our #210 vs ADP 42; Garrett Wilson, Rice,
+  McLaurin, Evans all buried). Fix: anchor on his PER-GAME rate × his career-
+  typical games (`c_games_avg`, clamped 8–17) instead of the raw total. Backtest
+  2022-25 standard on the career+comp stack: overall rank **0.6656 → 0.6782**
+  (+0.013, ~= the reconcile gain), MAE 42.1 → 40.9, and the injured subset
+  (≤12 prior games) most of all (rho +0.022). Naive `ppg × 17` FAILS (over-
+  projects the chronically fragile, MAE worse); the durability cap is what makes
+  it work. Two-sided and both sides right: Nabers → #123, Wilson → #45 (recovered),
+  while injury-prone-but-healthy-last-year studs regress toward their real
+  availability (CMC 350 → 268, #1 → #9, ADP 6 — a 29-yr-old injury risk landing
+  where the market has him). This is the durability/injury signal done RIGHT —
+  earlier a standalone workload FEATURE didn't rank, but folding availability into
+  the anchor (rate × expected games) does, because it fixes the volume the totals
+  misstate. Leak-free (`c_games_avg` uses seasons ≤ prior). Falls back to raw
+  points without career features.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (who's ahead, by
   the room ordering above; empty = leads the room),
