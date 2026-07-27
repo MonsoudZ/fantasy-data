@@ -789,3 +789,37 @@ def test_consensus_adp_names_match_the_board():
     bnorm = {_norm(p) for p in board["player"]}
     matched = sum(1 for k in adp if k in bnorm)
     assert matched >= 150, f"only {matched} ADP names matched the board -- normalisation drift?"
+
+
+@requires_data_lake
+def test_reconcile_orders_rb_rooms_by_depth_and_leaves_other_positions_alone():
+    """Depth-chart reconciliation: within each RB room the starter (lower ADP /
+    depth slot) must not project BELOW a teammate the depth chart puts behind him,
+    and it must touch RB projections only -- WR/TE are left exactly as they were."""
+    from ffdata.draft import _consensus_adp, _team_season, draft_board
+    from ffdata.ingest import upcoming_nfl_season
+    from ffdata.optimize import _norm
+    from ffdata.db import connect
+    from ffdata.scoring import PPR
+    con = connect()
+    up = upcoming_nfl_season()
+    base = draft_board(up, rules=PPR, con=con, career=True, competition=True)
+    rec = draft_board(up, rules=PPR, con=con, career=True, competition=True, reconcile=True)
+    # Non-RB projections are untouched.
+    j = base.merge(rec, on="player_id", suffixes=("_b", "_r"))
+    non_rb = j[j["position_b"] != "RB"]
+    assert (non_rb["proj_b"] == non_rb["proj_r"]).all(), "reconcile changed a non-RB projection"
+    # Some RB projections DID move (Gainwell/Irving-style swaps), i.e. not a no-op.
+    rb = j[j["position_b"] == "RB"]
+    assert (rb["proj_b"] != rb["proj_r"]).any(), "reconcile changed nothing on RBs"
+    # Within each RB room, projection order must respect the ADP (depth) order.
+    adp = _consensus_adp(con)
+    if adp:
+        ts = _team_season(con)
+        ts = ts[ts["season"] == up][["player_id", "team"]]
+        m = rec[rec["position"] == "RB"][["player_id", "player", "proj"]].merge(ts, on="player_id")
+        m["adp"] = m["player"].map(lambda n: adp.get(_norm(n)))
+        for _team, g in m.dropna(subset=["adp"]).groupby("team"):
+            g = g.sort_values("adp")   # by consensus depth order
+            assert (g["proj"].values == sorted(g["proj"].values, reverse=True)).all(), \
+                f"RB room not ordered by ADP after reconcile: {list(g['player'])}"

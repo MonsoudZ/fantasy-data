@@ -349,7 +349,11 @@ def _get_board(req: BoardRequest):
         # proven workhorses (wrong direction for risk), and a career-year touch
         # spike doesn't beat the 0.6-prior blend that already regresses it -- so
         # regression risk is shown as CONTEXT, not baked into VOR (see the ledger).
-        board = draft_board(req.season, cfg, rules=rules, career=True, competition=True)
+        # reconcile=True: reorder each RB room's projection to the depth chart
+        # (consensus ADP for the draft year), the biggest measured RB accuracy win
+        # -- it fixes our model rating a backup over the starter, in VOR.
+        board = draft_board(req.season, cfg, rules=rules, career=True,
+                            competition=True, reconcile=True)
         try:
             # Mark down anyone known to be unavailable (IR/PUP/suspended) and
             # re-score VOR so his RANK drops, then add ceiling/floor/sleeper/anchor.

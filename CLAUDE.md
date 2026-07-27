@@ -384,6 +384,27 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   where WE disagree with the market (context only, never in VOR). Big deltas are
   the model's own tells: we're too LOW on Irving/Hampton/Rice, too HIGH on backup
   TEs (Theo Johnson). The board still degrades cleanly with no feed loaded.
+- **Depth-chart reconciliation is the BIGGEST accuracy win we've found — and it's
+  IN VOR** (`draft._reconcile_rb_projection`, `_rb_depth_team`, `reconcile=` flag,
+  ON for the web board). Two backs on one team split ONE backfield's touches, but
+  the model projects each from his own history, so it ranks a high-volume backup
+  over the actual starter (Gainwell 161 over Irving 140). Fix: within each RB
+  room, REORDER the projections to the depth order — the starter gets the room's
+  highest projection, and on down. Backtest 2022-25 standard, out of sample:
+  overall rank **0.6655 → 0.6775** (+0.012), **RB rank 0.585 → 0.625 (+0.041)** —
+  ~3× the career gain and the largest any signal has produced — MAE 42.1 → 41.3,
+  RB MAE 49.0 → 46.5. Positive in 3 of 4 seasons (2023 +0.118), never negative.
+  For 2026 Irving's proj goes 140→162 and his VOR −17 → +4 (above replacement),
+  swapping past Gainwell. **RB-ONLY on purpose**: reconciling WR/TE HURTS (WR rank
+  0.652 → 0.511) — WRs aren't a single pool, and depth SLOT (LWR/RWR/SWR) ≠ fantasy
+  production order. Full reorder beats a half-blend. Ordering signal: nflverse
+  week-1 depth (`depth_team`) for played seasons — leak-free, the roster a team
+  opened with — and **consensus ADP** for the upcoming season (nflverse's preseason
+  depth is empty); a back with neither stays put. Runs on the vet+rookie pool
+  (before VOR) so a rookie lead back like Jeanty is ordered too. NOT yet enabled
+  in the season SIM (career improved projection yet LOST the sim, so "better
+  projection" ≠ "more titles" until swept) — flag default-off, on for the human
+  board only. **Open: run the sim sweep on reconcile.**
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (who's ahead, by
   the room ordering above; empty = leads the room),
