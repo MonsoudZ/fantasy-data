@@ -160,7 +160,11 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   same sim.) Both the web board AND the sim now DEFAULT to realistic
   (`draft_boards`/`prepare`/`run_all_slots` default career=competition=reconcile=
   True) — so the harness validates the same board a user drafts with. Pass the
-  flags False to replay the bare baseline.
+  flags False to replay the bare baseline. **Confirmed** by re-running the sweep
+  with NO flags (defaults only): it reproduced the realistic rows to the decimal —
+  naive 31% / 4.35 / 77% (5·1·0·9 titles by year), sharp 10% / 6.40 / 50%
+  (1·1·2·1) — so `run_all_slots(season)` out of the box now draws the realistic
+  board.
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 
