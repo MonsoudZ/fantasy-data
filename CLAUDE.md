@@ -165,6 +165,24 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   naive 31% / 4.35 / 77% (5·1·0·9 titles by year), sharp 10% / 6.40 / 50%
   (1·1·2·1) — so `run_all_slots(season)` out of the box now draws the realistic
   board.
+- **Re-swept after the games-normalized anchor landed (it's live in the realistic
+  default): big win vs naive, ~neutral vs sharp.** Realistic + anchor vs the
+  pre-anchor realistic rows:
+
+  | field | metric | pre-anchor | + anchor |
+  |---|---|---|---|
+  | naive | titles / mean / playoff | 31% / 4.35 / 77% | **42% / 3.42 / 85%** |
+  | sharp | titles / mean / playoff | 10% / 6.40 / 50% | 6% / 6.50 / 46% |
+
+  Against the naive field the more-accurate board DOMINATES — titles 31→42%, mean
+  finish 4.35→3.42, playoff 77→85% (and titles moved this time, not just finish).
+  Against the sharp field it's a hair WORSE — titles 10→6% (5→3 of 48), mean flat
+  (6.40→6.50), playoff 50→46% — all inside bracket noise, but not an improvement.
+  Read honestly: the anchor's injured-recovery bets (Nabers/Wilson up, CMC down)
+  pay off big when opponents draft weakly and wash out when they draft as well as
+  we do. Kept in the default because (a) it's a measured accuracy win out of
+  sample (+0.013 rank), (b) a large naive-field win, (c) the sharp dip is noise —
+  and a typical home league is a MIX, closer to naive than all-sharp.
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 
