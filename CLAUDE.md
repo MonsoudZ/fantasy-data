@@ -157,8 +157,10 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   accuracy into a better average finish. (NB these absolute numbers use the current
   sim and differ from the older table above, which predates several drafting fixes;
   what's apples-to-apples here is the baseline-vs-realistic delta, both run in the
-  same sim.) The web board already ships realistic; the sim flags stay default-off
-  but are now available to validate it.
+  same sim.) Both the web board AND the sim now DEFAULT to realistic
+  (`draft_boards`/`prepare`/`run_all_slots` default career=competition=reconcile=
+  True) — so the harness validates the same board a user drafts with. Pass the
+  flags False to replay the bare baseline.
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 

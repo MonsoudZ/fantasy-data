@@ -353,13 +353,18 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
 
 def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                  con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT,
-                 career: bool = False, upside_weight: float = UPSIDE_WEIGHT,
-                 competition: bool = False, reconcile: bool = False
+                 career: bool = True, upside_weight: float = UPSIDE_WEIGHT,
+                 competition: bool = True, reconcile: bool = True
                  ) -> tuple[list[dict], list[dict]]:
     """(our board, the naive opponents' board) -- preseason only, no projector.
 
     Split out of `prepare` because it costs seconds while fitting the weekly
     projector costs minutes, and the draft is testable on its own.
+
+    Our board now defaults to the REALISTIC config the web ships -- career +
+    competition + reconcile -- so the sim validates the same board a user drafts
+    with (swept better mean finish in both fields; see the ledger). Pass the flags
+    False to draft the bare baseline.
 
     Opponents rank by last season's raw points, the standard baseline here. Worth
     knowing what that does to a draft: raw points ignore positional scarcity, so
@@ -387,9 +392,9 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
 
 
 def prepare(season: int, rules: ScoringRules = STANDARD, projector: str = "gbm",
-            n_teams: int = 12, con=None, log=print, career: bool = False,
-            upside_weight: float = UPSIDE_WEIGHT, competition: bool = False,
-            reconcile: bool = False) -> dict:
+            n_teams: int = 12, con=None, log=print, career: bool = True,
+            upside_weight: float = UPSIDE_WEIGHT, competition: bool = True,
+            reconcile: bool = True) -> dict:
     """Everything that doesn't depend on which draft slot we hold.
 
     The board, the fitted projector and each week's projections are identical for
@@ -789,8 +794,8 @@ def _waiver_order(scores_so_far) -> list[int]:
 def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                   projector: str = "gbm", waivers: bool = True, con=None,
                   log=print, opponent: str = "naive", noise: float = 24.0,
-                  career: bool = False, upside_weight: float = UPSIDE_WEIGHT,
-                  competition: bool = False, reconcile: bool = False) -> dict:
+                  career: bool = True, upside_weight: float = UPSIDE_WEIGHT,
+                  competition: bool = True, reconcile: bool = True) -> dict:
     """Replay the season from EVERY draft slot and report the distribution.
 
     One season from one slot is a single sample: draft position and the
