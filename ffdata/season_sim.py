@@ -353,7 +353,8 @@ def run_waivers(roster: list[dict], pool: list[dict], proj: dict,
 
 def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                  con=None, rookie_discount: float = ROOKIE_DRAFT_DISCOUNT,
-                 career: bool = False, upside_weight: float = UPSIDE_WEIGHT
+                 career: bool = False, upside_weight: float = UPSIDE_WEIGHT,
+                 competition: bool = False, reconcile: bool = False
                  ) -> tuple[list[dict], list[dict]]:
     """(our board, the naive opponents' board) -- preseason only, no projector.
 
@@ -372,7 +373,8 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
               "starters": {"QB": 1, "RB": 2, "WR": 2, "TE": 1}, "flex": 1}
     board = draft_board(season, league, rules=rules, con=con,
                         rookie_discount=rookie_discount, career=career,
-                        upside_weight=upside_weight)
+                        upside_weight=upside_weight, competition=competition,
+                        reconcile=reconcile)
     kdst = _preseason_kdst(con, season, rules)
     # Keep VOR and auction $ on each record -- they ARE the reason a VOR draft
     # takes a player (highest value over replacement still available), so the
@@ -386,7 +388,8 @@ def draft_boards(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
 
 def prepare(season: int, rules: ScoringRules = STANDARD, projector: str = "gbm",
             n_teams: int = 12, con=None, log=print, career: bool = False,
-            upside_weight: float = UPSIDE_WEIGHT) -> dict:
+            upside_weight: float = UPSIDE_WEIGHT, competition: bool = False,
+            reconcile: bool = False) -> dict:
     """Everything that doesn't depend on which draft slot we hold.
 
     The board, the fitted projector and each week's projections are identical for
@@ -398,7 +401,8 @@ def prepare(season: int, rules: ScoringRules = STANDARD, projector: str = "gbm",
 
     log(f"Building the {season} draft board (prior seasons only)…")
     ours, naive = draft_boards(season, rules, n_teams, con, career=career,
-                               upside_weight=upside_weight)
+                               upside_weight=upside_weight, competition=competition,
+                               reconcile=reconcile)
 
     log(f"Fitting the weekly projector ({projector})…")
     sim = MatchupSimulator.fit(projector=projector, rules=rules)
@@ -785,7 +789,8 @@ def _waiver_order(scores_so_far) -> list[int]:
 def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                   projector: str = "gbm", waivers: bool = True, con=None,
                   log=print, opponent: str = "naive", noise: float = 24.0,
-                  career: bool = False, upside_weight: float = UPSIDE_WEIGHT) -> dict:
+                  career: bool = False, upside_weight: float = UPSIDE_WEIGHT,
+                  competition: bool = False, reconcile: bool = False) -> dict:
     """Replay the season from EVERY draft slot and report the distribution.
 
     One season from one slot is a single sample: draft position and the
@@ -795,7 +800,8 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
     a finish distribution and a title rate, not an anecdote.
     """
     ctx = prepare(season, rules, projector, n_teams, con, log,
-                  career=career, upside_weight=upside_weight)
+                  career=career, upside_weight=upside_weight,
+                  competition=competition, reconcile=reconcile)
     runs = []
     for slot in range(n_teams):
         r = run_season(season, rules, n_teams, slot, projector, waivers,
