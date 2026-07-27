@@ -494,6 +494,16 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   ADP prices bust-aversion our mean can't; the SIM already carries
   `ROOKIE_DRAFT_DISCOUNT=0.80`) — but that's a floor hedge, distinct from this
   mean-calibration, and now stacks on it (revisit/re-tune if it matters).
+  **Measured and settled:** swept the rookie DRAFT discount 1.0 / 0.80 / 0.65 vs
+  the SHARP field (on top of the calibrated means), 4 seasons × 12 slots. Mean
+  finish is monotonically BEST at **1.0** (6.54 / 6.75 / 7.10) — titles tick up
+  with more discount (2/3/4 of 48) but that's noise. So against sharp drafters a
+  rookie risk discount does NOT help; it just makes you pass on fairly-valued
+  rookies. Once the mean is calibrated, the floor hedge is redundant. Set
+  `ROOKIE_DRAFT_DISCOUNT = 1.0` (was 0.80 — it existed to fight the pre-calibration
+  mean inflation), matching the web board. The separate `ROOKIE_START_DISCOUNT`
+  (a LINEUP lever: hold an unproven rookie behind a veteran until he earns it)
+  stays on.
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (who's ahead, by
   the room ordering above; empty = leads the room),

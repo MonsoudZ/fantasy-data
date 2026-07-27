@@ -75,11 +75,14 @@ WAIVER_MIN_GAIN = 3.0
 # starting upgrade anyway, so the tail is dead weight -- capping it is realistic
 # and keeps the all-team replay fast enough to sweep every draft slot.
 WAIVER_POOL_PER_POS = 6
-# Risk haircut on rookie DRAFT value. Rookie projections are ~calibrated on the
-# mean but high-variance (most bust), so a veteran at the same number is safer in
-# a H2H league. Below 1 makes the board prefer proven veterans; measured by the
-# sweep. See CLAUDE.md's rookie finding.
-ROOKIE_DRAFT_DISCOUNT = 0.80
+# Risk haircut on rookie DRAFT value -- now 1.0 (OFF). It used to be 0.80 to
+# compensate for the rookie model running hot, but `rookie_projection` now
+# self-calibrates the mean by pick tier, so the haircut became redundant. Swept
+# 1.0 / 0.80 / 0.65 vs the SHARP field: mean finish is monotonically BEST at 1.0
+# (6.54 / 6.75 / 7.10) -- against sharp drafters an extra discount just makes you
+# pass on fairly-valued rookies. Matches the web board (also 1.0). See CLAUDE.md.
+# (The separate ROOKIE_START_DISCOUNT below is a LINEUP lever, still on.)
+ROOKIE_DRAFT_DISCOUNT = 1.0
 # Lineup haircut on an UNPROVEN rookie (seeded from his preseason prior, no games
 # yet). Below 1 means "start the veteran, hold the rookie" -- he only starts when
 # he's clearly better or there's no veteran for the slot. Once he has real weekly
