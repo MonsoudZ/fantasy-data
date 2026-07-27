@@ -473,6 +473,27 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the anchor (rate × expected games) does, because it fixes the volume the totals
   misstate. Leak-free (`c_games_avg` uses seasons ≤ prior). Falls back to raw
   points without career features.
+- **Rookie projections: the MEANS are mostly fine — it's the mid-rounds that ran
+  hot** (`rookie_projection` now self-calibrates by pick tier; `_rookie_tier`).
+  Measured the draft-capital model vs actual rookie-season points, 2022-25, by
+  pick tier (busts counted as 0): top-15 **0.96**, 16-40 **0.96**, 41-80 **0.76**,
+  81-200 0.91. So a top pick like Carnell Tate (pick 4) is NOT over-projected on
+  the mean — the "runs hot" perception at the top is really rookie VARIANCE
+  (16-68% bust rates), not a bad number. The genuine mean-inflation is the
+  MID-ROUNDS. Root cause: the model trains only on rookies who PLAYED (inner join
+  with stats), so it never sees the busts. Naive fix (train on all picks incl.
+  0-fp) OVER-corrects — most late skill picks are zeros and it crushes even the
+  top tier — so instead correct leak-free by pick tier: predict on every prior
+  IN-DATA-RANGE rookie (busts = 0), scale each tier by realized/projected
+  (~0.95 / 0.81 / 0.87). Out of sample it lifts rookie MAE 33.9 → 32.3, rank flat.
+  Top picks barely move (Tate 212 → 202 PPR); the mid-rounds come down. **Gotcha
+  fixed:** the calibration `prior` must be limited to draft classes we have stats
+  for — an old draftee with no fp row is missing DATA, not a real 0, and left in
+  it collapsed every tier ratio to ~0.15 (Tate → 32). For a REDRAFT vs sharp
+  drafters there's still a separate case for a rookie RISK discount (the market's
+  ADP prices bust-aversion our mean can't; the SIM already carries
+  `ROOKIE_DRAFT_DISCOUNT=0.80`) — but that's a floor hedge, distinct from this
+  mean-calibration, and now stacks on it (revisit/re-tune if it matters).
 - **Veterans get the same treatment** (`draft.player_context`): every board row
   shows the room — `moved` (with the prior team), `blocked_by` (who's ahead, by
   the room ordering above; empty = leads the room),
