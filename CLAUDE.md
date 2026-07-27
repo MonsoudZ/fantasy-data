@@ -134,6 +134,31 @@ python -m ffdata.web                                # http://127.0.0.1:8000
     played); the waiver rule dropped him in week 3 when his form collapsed. The
     naive field's QB-hoarding leaves us a bad QB (2025: Cam Ward), fixed on waivers
     by week 2 (Dak Prescott).
+- **The REALISTIC board (career + competition + reconcile) validated in the sim —
+  it improves MEAN FINISH, the stable measure.** The sim used to draft a baseline
+  board (none of these signals), so it validated a different board than the one
+  the web ships. Threaded `competition` + `reconcile` through `draft_boards →
+  prepare → run_all_slots` and swept baseline vs realistic, current sim, 4 seasons
+  × 12 slots, standard:
+
+  | opponent field | config | titles | mean finish | playoff % |
+  |---|---|---|---|---|
+  | naive | baseline  | 31% | 5.12 | 62% |
+  | naive | **realistic** | 31% | **4.35** | **77%** |
+  | sharp | baseline  | 15% | 7.06 | 50% |
+  | sharp | **realistic** | 10% | **6.40** | 50% |
+
+  Mean finish improves in BOTH fields (5.12→4.35, 7.06→6.40) and playoff rate
+  jumps vs the naive field (62→77%). Titles are flat vs naive and dip vs sharp
+  (7→5 of 48 — inside playoff-bracket noise; the 6-team bracket is a lottery, so
+  mean finish and playoff rate are the trustworthy signals, and both moved the
+  right way). This is the KEY contrast with career-ALONE, which improved projection
+  but LOST the sim outright — the full stack, unlike career alone, translates
+  accuracy into a better average finish. (NB these absolute numbers use the current
+  sim and differ from the older table above, which predates several drafting fixes;
+  what's apples-to-apples here is the baseline-vs-realistic delta, both run in the
+  same sim.) The web board already ships realistic; the sim flags stay default-off
+  but are now available to validate it.
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 
