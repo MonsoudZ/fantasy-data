@@ -196,6 +196,28 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   we do. Kept in the default because (a) it's a measured accuracy win out of
   sample (+0.013 rank), (b) a large naive-field win, (c) the sharp dip is noise —
   and a typical home league is a MIX, closer to naive than all-sharp.
+- **Full-stack re-sweep (everything in: multi-year anchor + role-aware games +
+  age cal + rookie cal + streamability, all live in the realistic default).**
+  Baseline vs realistic, both fields, 4 seasons × 12 slots (48 leagues/cell):
+
+  | field | board | titles | mean | playoff |
+  |---|---|---|---|---|
+  | naive | baseline  | 44% | 3.21 | 90% |
+  | naive | **realistic** | **54%** | 3.42 | **94%** |
+  | sharp | baseline  | 10% | 6.33 | 48% |
+  | sharp | realistic | 6% | 6.52 | 50% |
+
+  vs the pre-multi-year-anchor rows (naive 42% / 3.42 / 85%; sharp 6% / 6.50 / 46%):
+  **naive title rate 42→54% (+12pp), playoff 85→94%** — the improvements since the
+  last sweep compound into real league wins against a beatable field. Sharp field
+  unchanged (~6%, ~chance) and EXPECTED: sharp opponents draft our own VOR board +
+  jitter, so realistic-vs-realistic is a coin flip by construction (12 teams sharing
+  one board → ~8%); that cell measures robustness, not edge. Honest caveats: (a)
+  mean finish barely moved (3.21→3.42) even as titles jumped — the realistic board
+  trades a hair of average-finish consistency for a higher ceiling (drafts to WIN,
+  not to safely make playoffs); right trade for a real draft but a genuine variance
+  signature. (b) The edge only shows vs the naive field — it comes from leaguemates
+  drafting worse than this board, a reasonable home-league bet, not a guarantee.
 - Same-game correlation and stacking are **real but modest** — stacking is an
   ownership/leverage play, not a raw-ceiling win (we have no ownership data).
 
