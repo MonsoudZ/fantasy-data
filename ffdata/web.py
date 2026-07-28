@@ -867,6 +867,7 @@ class LeagueModel(BaseModel):
     scoring: str = "ppr"
     teams: int = Field(12, ge=2, le=32)
     drafted: list[str] = []
+    mine: list[str] = []          # the subset drafted to MY team (roster-aware board)
     keepers: list = []
     rules: dict | None = None
     lineup: dict | None = None

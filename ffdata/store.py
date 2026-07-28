@@ -44,6 +44,9 @@ class League:
     scoring: str = "ppr"
     teams: int = 12
     drafted: list[str] = field(default_factory=list)
+    # The subset of `drafted` taken to YOUR team, for the roster-aware draft board
+    # (it re-ranks by which of your starting slots a player would fill).
+    mine: list[str] = field(default_factory=list)
     keepers: list = field(default_factory=list)   # list of [player, cost]
     # Optional full custom scoring (ScoringRules field dict). When set it wins
     # over the `scoring` preset label -- how imported leagues keep exact scoring.
