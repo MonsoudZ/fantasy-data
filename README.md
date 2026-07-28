@@ -84,6 +84,7 @@ python -m ffdata.experiments weekly --holdout regression
 python -m ffdata.experiments draft --holdout regression --scoring ppr
 python -m ffdata.experiments season --holdout regression --opponent naive
 python -m ffdata.experiments season-sweep --holdout regression
+python -m ffdata.experiments strategy-sweep --holdout regression
 python -m ffdata.experiments summary
 ```
 
@@ -100,6 +101,11 @@ The `season-sweep` benchmark replays 2022–2025 across 0%, 25%, 50%, 75%, and
 100% sharp opponents. It reuses each season's fitted context, pairs every field
 strength by draft slot, and resamples whole NFL seasons for uncertainty that
 reflects year-to-year variation.
+The `strategy-sweep` command then compares the baseline VOR draft with the
+adaptive “Beat the field” policy on identical seasons, field compositions, and
+draft slots. The adaptive policy forecasts positional drop-offs from opponents'
+preseason boards rather than using today's ADP in historical seasons, preserving
+the no-lookahead guarantee.
 
 ## Datasets
 

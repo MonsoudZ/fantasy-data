@@ -27,6 +27,7 @@ DEFAULT_POLICY = {
         "draft": {"regression": 2025, "locked": 2026},
         "season": {"regression": 2025, "locked": 2026},
         "season-sweep": {"regression": 2025, "locked": 2026},
+        "strategy-sweep": {"regression": 2025, "locked": 2026},
     },
 }
 
@@ -299,13 +300,26 @@ def metric_summary(record: dict) -> str:
         fields = metrics.get("field_strengths", [])
         if fields:
             first, last = fields[0], fields[-1]
-            compact = lambda row: (  # noqa: E731 - keeps the endpoint rendering parallel
-                f"finish {row.get('mean_finish', '—')}, "
-                f"playoffs {row.get('playoff_rate', 0) * 100:.1f}%, "
-                f"titles {row.get('title_rate', 0) * 100:.1f}%"
-            )
+            def compact(row):
+                return (f"finish {row.get('mean_finish', '—')}, "
+                        f"playoffs {row.get('playoff_rate', 0) * 100:.1f}%, "
+                        f"titles {row.get('title_rate', 0) * 100:.1f}%")
+
             return (f"{first.get('sharp_fraction', 0) * 100:.0f}% sharp: {compact(first)}; "
                     f"{last.get('sharp_fraction', 1) * 100:.0f}%: {compact(last)}")
+    if kind == "strategy-sweep":
+        results = metrics.get("strategy_results", {})
+        baseline = results.get("baseline", {}).get("field_strengths", [])
+        adaptive = results.get("adaptive", {}).get("field_strengths", [])
+        paired = metrics.get("paired_adaptive_vs_baseline", [])
+        if baseline and adaptive and paired:
+            base, challenger, delta = baseline[-1], adaptive[-1], paired[-1]
+            finish_delta = delta.get("mean_finish_delta", {}).get("estimate", 0)
+            return (f"{challenger.get('sharp_fraction', 1) * 100:.0f}% sharp adaptive: "
+                    f"finish {challenger.get('mean_finish', '—')} vs "
+                    f"{base.get('mean_finish', '—')} (Δ {finish_delta:+.2f}); playoffs "
+                    f"{challenger.get('playoff_rate', 0) * 100:.1f}%; titles "
+                    f"{challenger.get('title_rate', 0) * 100:.1f}%")
     return json.dumps(metrics, sort_keys=True)[:160]
 
 
@@ -313,7 +327,8 @@ def variant_summary(record: dict) -> str:
     """Compact configuration label so unlike experiment variants stay distinct."""
     config, kind = record.get("config", {}), record.get("kind")
     if kind == "season":
-        return str(config.get("opponent", "—"))
+        strategy = config.get("draft_strategy", "baseline")
+        return f"{config.get('opponent', '—')} · {strategy}"
     if kind == "draft":
         return f"{config.get('board', '—')} · {config.get('scoring', '—')}"
     if kind == "weekly":
@@ -324,7 +339,14 @@ def variant_summary(record: dict) -> str:
         season_label = (f"{min(seasons)}–{max(seasons)}" if seasons else "—")
         fraction_label = (f"{min(fractions) * 100:.0f}–{max(fractions) * 100:.0f}% sharp"
                           if fractions else "—")
-        return f"{season_label} · {fraction_label}"
+        return f"{season_label} · {fraction_label} · {config.get('draft_strategy', 'baseline')}"
+    if kind == "strategy-sweep":
+        seasons = config.get("seasons", [])
+        fractions = config.get("sharp_fractions", [])
+        season_label = (f"{min(seasons)}–{max(seasons)}" if seasons else "—")
+        fraction_label = (f"{min(fractions) * 100:.0f}–{max(fractions) * 100:.0f}% sharp"
+                          if fractions else "—")
+        return f"{season_label} · {fraction_label} · paired"
     return "—"
 
 

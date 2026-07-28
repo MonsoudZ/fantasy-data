@@ -17,6 +17,10 @@
     "season-sweep": {
       "regression": 2025,
       "locked": 2026
+    },
+    "strategy-sweep": {
+      "regression": 2025,
+      "locked": 2026
     }
   }
 }

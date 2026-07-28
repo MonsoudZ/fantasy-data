@@ -5,6 +5,7 @@ Examples:
     python -m ffdata.experiments draft --holdout 2024
     python -m ffdata.experiments season --holdout regression --opponent naive
     python -m ffdata.experiments season-sweep --holdout regression
+    python -m ffdata.experiments strategy-sweep --holdout regression
     python -m ffdata.experiments summary
 """
 
@@ -109,6 +110,8 @@ def season_metrics(
     opponent: str = "naive",
     noise: float = 24.0,
     sharp_fraction: float = 0.5,
+    draft_strategy: str = "baseline",
+    scarcity_weight: float = 1.0,
     seed: int = 0,
     bootstrap_resamples: int = 2000,
 ) -> dict:
@@ -116,7 +119,8 @@ def season_metrics(
     result = run_all_slots(
         season, rules=_RULES[scoring], n_teams=teams, projector=projector,
         waivers=waivers, opponent=opponent, noise=noise,
-        sharp_fraction=sharp_fraction, log=lambda *a: None,
+        sharp_fraction=sharp_fraction, draft_strategy=draft_strategy,
+        scarcity_weight=scarcity_weight, log=lambda *a: None,
     )
     runs = result["runs"]
     places = [float(r["regular_season_place"]) for r in runs]
@@ -170,6 +174,8 @@ def season_sweep_metrics(
     projector: str = "gbm",
     waivers: bool = True,
     noise: float = 24.0,
+    draft_strategy: str = "baseline",
+    scarcity_weight: float = 1.0,
     seed: int = 0,
     bootstrap_resamples: int = 2000,
 ) -> dict:
@@ -189,7 +195,8 @@ def season_sweep_metrics(
             result = run_all_slots(
                 season, rules=rules, n_teams=teams, projector=projector,
                 waivers=waivers, opponent="mixed", sharp_fraction=fraction,
-                noise=noise, ctx=ctx, log=lambda *a: None,
+                noise=noise, draft_strategy=draft_strategy,
+                scarcity_weight=scarcity_weight, ctx=ctx, log=lambda *a: None,
             )
             runs_by_fraction[fraction].append(result["runs"])
 
@@ -289,6 +296,161 @@ def season_sweep_metrics(
     }
 
 
+def _strategy_field_metrics(seasons: list[int], fraction: float,
+                            season_runs: list[list[dict]], teams: int,
+                            bootstrap_resamples: int, seed: int) -> dict:
+    place_clusters = [[float(run["regular_season_place"]) for run in runs]
+                      for runs in season_runs]
+    playoff_clusters = [[float(place <= 6) for place in places]
+                        for places in place_clusters]
+    title_clusters = [[float(run["we_won"]) for run in runs] for runs in season_runs]
+    places = [value for cluster in place_clusters for value in cluster]
+    playoffs = [value for cluster in playoff_clusters for value in cluster]
+    titles = [value for cluster in title_clusters for value in cluster]
+    return {
+        "sharp_fraction": fraction,
+        "sharp_opponents": int(((teams - 1) * fraction) + 0.5),
+        "n_slots": len(places),
+        "mean_finish": round(sum(places) / len(places), 4),
+        "playoff_rate": round(sum(playoffs) / len(playoffs), 4),
+        "title_rate": round(sum(titles) / len(titles), 4),
+        "titles": int(sum(titles)),
+        "by_season": [
+            {
+                "season": season,
+                "places": [int(value) for value in place_clusters[index]],
+                "titles_by_slot": [bool(value) for value in title_clusters[index]],
+                "mean_finish": round(
+                    sum(place_clusters[index]) / len(place_clusters[index]), 4,
+                ),
+                "playoff_rate": round(
+                    sum(playoff_clusters[index]) / len(playoff_clusters[index]), 4,
+                ),
+                "title_rate": round(
+                    sum(title_clusters[index]) / len(title_clusters[index]), 4,
+                ),
+            }
+            for index, season in enumerate(seasons)
+        ],
+        "confidence_intervals": {
+            "mean_finish": bootstrap_cluster_mean_ci(
+                place_clusters, resamples=bootstrap_resamples, seed=seed,
+            ),
+            "playoff_rate": bootstrap_cluster_mean_ci(
+                playoff_clusters, resamples=bootstrap_resamples, seed=seed + 1,
+            ),
+            "title_rate": bootstrap_cluster_mean_ci(
+                title_clusters, resamples=bootstrap_resamples, seed=seed + 2,
+            ),
+        },
+    }
+
+
+def _paired_strategy_metrics(current: list[list[dict]], baseline: list[list[dict]],
+                             bootstrap_resamples: int, seed: int) -> dict:
+    place_deltas, playoff_deltas, title_deltas = [], [], []
+    for current_runs, baseline_runs in zip(current, baseline, strict=True):
+        current_places = [float(run["regular_season_place"]) for run in current_runs]
+        baseline_places = [float(run["regular_season_place"]) for run in baseline_runs]
+        place_deltas.append([a - b for a, b in zip(
+            current_places, baseline_places, strict=True,
+        )])
+        playoff_deltas.append([
+            float(a <= 6) - float(b <= 6)
+            for a, b in zip(current_places, baseline_places, strict=True)
+        ])
+        title_deltas.append([
+            float(a["we_won"]) - float(b["we_won"])
+            for a, b in zip(current_runs, baseline_runs, strict=True)
+        ])
+    return {
+        "mean_finish_delta": bootstrap_cluster_mean_ci(
+            place_deltas, resamples=bootstrap_resamples, seed=seed,
+        ),
+        "playoff_rate_delta": bootstrap_cluster_mean_ci(
+            playoff_deltas, resamples=bootstrap_resamples, seed=seed + 1,
+        ),
+        "title_rate_delta": bootstrap_cluster_mean_ci(
+            title_deltas, resamples=bootstrap_resamples, seed=seed + 2,
+        ),
+    }
+
+
+def strategy_sweep_metrics(
+    seasons: list[int],
+    sharp_fractions: list[float],
+    *,
+    scoring: str = "standard",
+    teams: int = 12,
+    projector: str = "gbm",
+    waivers: bool = True,
+    noise: float = 24.0,
+    scarcity_weight: float = 1.0,
+    seed: int = 0,
+    bootstrap_resamples: int = 2000,
+) -> dict:
+    """Paired baseline/adaptive replays on identical seasons, fields, and slots."""
+    from .season_sim import prepare, run_all_slots
+
+    strategies = ("baseline", "adaptive")
+    rules = _RULES[scoring]
+    runs = {
+        strategy: {fraction: [] for fraction in sharp_fractions}
+        for strategy in strategies
+    }
+    for season in seasons:
+        ctx = prepare(
+            season, rules=rules, projector=projector, n_teams=teams,
+            log=lambda *a: None,
+        )
+        for strategy in strategies:
+            for fraction in sharp_fractions:
+                result = run_all_slots(
+                    season, rules=rules, n_teams=teams, projector=projector,
+                    waivers=waivers, opponent="mixed", sharp_fraction=fraction,
+                    noise=noise, ctx=ctx, draft_strategy=strategy,
+                    scarcity_weight=scarcity_weight, log=lambda *a: None,
+                )
+                runs[strategy][fraction].append(result["runs"])
+
+    strategy_results = {}
+    for strategy_index, strategy in enumerate(strategies):
+        strategy_results[strategy] = {
+            "field_strengths": [
+                _strategy_field_metrics(
+                    seasons, fraction, runs[strategy][fraction], teams,
+                    bootstrap_resamples,
+                    seed + strategy_index * 100 + fraction_index * 10,
+                )
+                for fraction_index, fraction in enumerate(sharp_fractions)
+            ]
+        }
+    paired = [
+        {
+            "sharp_fraction": fraction,
+            **_paired_strategy_metrics(
+                runs["adaptive"][fraction], runs["baseline"][fraction],
+                bootstrap_resamples, seed + index * 10 + 1000,
+            ),
+        }
+        for index, fraction in enumerate(sharp_fractions)
+    ]
+    return {
+        "seasons": seasons,
+        "n_seasons": len(seasons),
+        "n_slots_per_strategy_field": len(seasons) * teams,
+        "strategy_results": strategy_results,
+        "paired_adaptive_vs_baseline": paired,
+        "bootstrap": {
+            "method": "percentile_cluster",
+            "sampling_unit": "nfl_season",
+            "confidence": 0.95,
+            "resamples": bootstrap_resamples,
+            "seed": seed,
+        },
+    }
+
+
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--holdout", default="regression",
                         help="regression, locked, or an explicit season")
@@ -328,6 +490,9 @@ def parser() -> argparse.ArgumentParser:
     season.add_argument("--opponent", choices=["naive", "mixed", "sharp"], default="naive")
     season.add_argument("--sharp-fraction", type=float, default=0.5,
                         help="fraction of opponents that are sharp when --opponent mixed")
+    season.add_argument("--draft-strategy", choices=["baseline", "adaptive"],
+                        default="baseline")
+    season.add_argument("--scarcity-weight", type=float, default=1.0)
     season.add_argument("--noise", type=float, default=24.0)
     season.add_argument("--no-waivers", action="store_true")
     season.add_argument("--seed", type=int, default=0, help="bootstrap seed")
@@ -341,9 +506,27 @@ def parser() -> argparse.ArgumentParser:
     sweep.add_argument("--teams", type=int, default=12)
     sweep.add_argument("--projector", choices=["gbm", "neural"], default="gbm")
     sweep.add_argument("--noise", type=float, default=24.0)
+    sweep.add_argument("--draft-strategy", choices=["baseline", "adaptive"],
+                       default="baseline")
+    sweep.add_argument("--scarcity-weight", type=float, default=1.0)
     sweep.add_argument("--no-waivers", action="store_true")
     sweep.add_argument("--seed", type=int, default=0, help="bootstrap seed")
     sweep.add_argument("--bootstrap-resamples", type=int, default=2000)
+
+    strategy = sub.add_parser(
+        "strategy-sweep", help="paired baseline vs adaptive scarcity benchmark",
+    )
+    _common(strategy)
+    strategy.add_argument("--seasons", default="2022-2025")
+    strategy.add_argument("--sharp-fractions", default="0,0.25,0.5,0.75,1")
+    strategy.add_argument("--scoring", choices=list(_RULES), default="standard")
+    strategy.add_argument("--teams", type=int, default=12)
+    strategy.add_argument("--projector", choices=["gbm", "neural"], default="gbm")
+    strategy.add_argument("--noise", type=float, default=24.0)
+    strategy.add_argument("--scarcity-weight", type=float, default=1.0)
+    strategy.add_argument("--no-waivers", action="store_true")
+    strategy.add_argument("--seed", type=int, default=0, help="bootstrap seed")
+    strategy.add_argument("--bootstrap-resamples", type=int, default=2000)
 
     summary = sub.add_parser("summary", help="regenerate the Markdown results table")
     summary.add_argument("--output", type=Path)
@@ -364,12 +547,12 @@ def _run(args) -> tuple[dict, Path]:
         raise HoldoutError(
             "working tree is dirty; commit first or pass --allow-dirty for an exploratory run"
         )
-    if args.command == "season-sweep":
+    if args.command in {"season-sweep", "strategy-sweep"}:
         from .cli import parse_seasons
         seasons = parse_seasons(args.seasons)
         if max(seasons) != season:
             raise HoldoutError(
-                f"season sweep ends at {max(seasons)}, but its selected holdout is {season}"
+                f"strategy window ends at {max(seasons)}, but its selected holdout is {season}"
             )
         for candidate in seasons:
             _ensure_played(candidate)
@@ -397,6 +580,8 @@ def _run(args) -> tuple[dict, Path]:
             "scoring": args.scoring, "teams": args.teams, "projector": args.projector,
             "waivers": not args.no_waivers, "opponent": args.opponent,
             "sharp_fraction": args.sharp_fraction, "noise": args.noise,
+            "draft_strategy": args.draft_strategy,
+            "scarcity_weight": args.scarcity_weight,
             "model_seed": 0, "bootstrap_seed": args.seed,
             "bootstrap_resamples": args.bootstrap_resamples,
         }
@@ -404,21 +589,42 @@ def _run(args) -> tuple[dict, Path]:
             season, scoring=args.scoring, teams=args.teams, projector=args.projector,
             waivers=not args.no_waivers, opponent=args.opponent, noise=args.noise,
             sharp_fraction=args.sharp_fraction,
+            draft_strategy=args.draft_strategy, scarcity_weight=args.scarcity_weight,
             seed=args.seed, bootstrap_resamples=args.bootstrap_resamples,
         )
-    else:
+    elif args.command == "season-sweep":
         fractions = _parse_fractions(args.sharp_fractions)
         config = {
             "seasons": seasons, "sharp_fractions": fractions,
             "scoring": args.scoring, "teams": args.teams, "projector": args.projector,
             "waivers": not args.no_waivers, "opponent": "mixed", "noise": args.noise,
+            "draft_strategy": args.draft_strategy,
+            "scarcity_weight": args.scarcity_weight,
             "model_seed": 0, "bootstrap_seed": args.seed,
             "bootstrap_resamples": args.bootstrap_resamples,
         }
         runner = lambda: season_sweep_metrics(
             seasons, fractions, scoring=args.scoring, teams=args.teams,
             projector=args.projector, waivers=not args.no_waivers, noise=args.noise,
+            draft_strategy=args.draft_strategy, scarcity_weight=args.scarcity_weight,
             seed=args.seed, bootstrap_resamples=args.bootstrap_resamples,
+        )
+    else:
+        fractions = _parse_fractions(args.sharp_fractions)
+        config = {
+            "seasons": seasons, "sharp_fractions": fractions,
+            "strategies": ["baseline", "adaptive"],
+            "scarcity_weight": args.scarcity_weight,
+            "scoring": args.scoring, "teams": args.teams, "projector": args.projector,
+            "waivers": not args.no_waivers, "opponent": "mixed", "noise": args.noise,
+            "model_seed": 0, "bootstrap_seed": args.seed,
+            "bootstrap_resamples": args.bootstrap_resamples,
+        }
+        runner = lambda: strategy_sweep_metrics(
+            seasons, fractions, scoring=args.scoring, teams=args.teams,
+            projector=args.projector, waivers=not args.no_waivers, noise=args.noise,
+            scarcity_weight=args.scarcity_weight, seed=args.seed,
+            bootstrap_resamples=args.bootstrap_resamples,
         )
 
     record = execute(
