@@ -58,10 +58,17 @@ def main() -> None:
     df = parse_pdf(args.pdf)
     df["source"] = args.source
 
+    from ffdata.data import publish_parquet
     from ffdata.db import RAW
     dest = RAW / "consensus_adp" / "consensus_adp.parquet"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(dest, index=False)
+    publish_parquet(
+        "consensus_adp",
+        df,
+        dest,
+        source=str(args.pdf.resolve()),
+        contract={"required": {"player", "adp", "source"}},
+        raw=RAW,
+    )
     print(f"wrote {len(df)} players -> {dest}  (ranks {df['adp'].min()}-{df['adp'].max()})")
 
 

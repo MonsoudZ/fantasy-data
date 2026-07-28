@@ -1,10 +1,21 @@
-"""Download retry/backoff + season helpers (no real network)."""
+"""Download, validation, atomic publishing, and season helpers (no real network)."""
 
+import io
+import json
 import urllib.error
+from pathlib import Path
 
+import pandas as pd
 import pytest
 
 import ffdata.ingest as ingest
+from ffdata.data import (
+    DataValidationError,
+    publish_parquet,
+    register_cached_parquet,
+    resolve_raw_path,
+    validate_frame,
+)
 from ffdata.ingest import FIRST_SEASON, current_nfl_season
 
 
@@ -114,3 +125,92 @@ def test_upcoming_season_is_what_you_draft_for():
     assert upcoming_nfl_season(dt.date(2026, 10, 1)) == 2026
     # Just after a season ends, look ahead to the next one.
     assert upcoming_nfl_season(dt.date(2027, 2, 15)) == 2027
+
+
+def test_data_path_precedence_and_installed_default(tmp_path):
+    legacy = tmp_path / "checkout" / "data" / "raw"
+    home = tmp_path / "home"
+    assert resolve_raw_path({}, legacy_raw=legacy, user_home=home) == home / ".ff-data" / "raw"
+    legacy.mkdir(parents=True)
+    assert resolve_raw_path({}, legacy_raw=legacy, user_home=home) == legacy
+    assert resolve_raw_path({"FFDATA_HOME": "/lake"}, legacy_raw=legacy) == Path("/lake/raw")
+    assert resolve_raw_path(
+        {"FFDATA_HOME": "/ignored", "FFDATA_DATA": "/exact/raw"}, legacy_raw=legacy
+    ) == Path("/exact/raw")
+
+
+def test_schema_validation_rejects_missing_empty_and_wrong_season():
+    contract = {"required": {"season", "week"}, "any_of": ({"team", "club"},)}
+    with pytest.raises(DataValidationError, match="empty"):
+        validate_frame("weekly", pd.DataFrame(), contract, season=2026)
+    with pytest.raises(DataValidationError, match="required columns"):
+        validate_frame("weekly", pd.DataFrame({"season": [2026], "team": ["DEN"]}), contract)
+    with pytest.raises(DataValidationError, match="expected one"):
+        validate_frame("weekly", pd.DataFrame({"season": [2026], "week": [1]}), contract)
+    with pytest.raises(DataValidationError, match="requested season 2026"):
+        validate_frame(
+            "weekly", pd.DataFrame({"season": [2025], "week": [1], "team": ["DEN"]}),
+            contract, season=2026,
+        )
+
+
+def test_publish_is_atomic_and_records_provenance(tmp_path, monkeypatch):
+    raw = tmp_path / "raw"
+    dest = raw / "sample" / "sample_2026.parquet"
+    frame = pd.DataFrame({"season": [2026], "week": [1], "value": [3.5]})
+    publish_parquet(
+        "sample", frame, dest, source="https://example.test/sample.parquet",
+        contract={"required": {"season", "week"}}, season=2026, raw=raw,
+    )
+    assert pd.read_parquet(dest).to_dict("records") == frame.to_dict("records")
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    entry = manifest["files"]["sample/sample_2026.parquet"]
+    assert entry["dataset"] == "sample"
+    assert entry["season"] == 2026
+    assert entry["source"] == "https://example.test/sample.parquet"
+    assert entry["rows"] == 1 and len(entry["sha256"]) == 64
+
+    original = dest.read_bytes()
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    with pytest.raises(OSError, match="disk"):
+        publish_parquet("sample", frame, dest, source="new", raw=raw)
+    assert dest.read_bytes() == original
+    assert not list(dest.parent.glob("*.tmp"))
+
+
+def test_fetch_validates_before_replacing_existing_file(tmp_path, monkeypatch):
+    dest = tmp_path / "weekly_2026.parquet"
+    dest.write_bytes(b"known-good")
+    bad = pd.DataFrame({"season": [2026], "week": [1]})
+    buf = io.BytesIO()
+    bad.to_parquet(buf, index=False)
+    monkeypatch.setattr(ingest, "_download", lambda url: buf.getvalue())
+    with pytest.raises(DataValidationError, match="missing required columns"):
+        ingest._fetch_to_parquet("weekly", "https://example.test/weekly.parquet", dest, season=2026)
+    assert dest.read_bytes() == b"known-good"
+
+
+def test_cached_parquet_is_validated_and_backfilled_once(tmp_path, monkeypatch):
+    raw = tmp_path / "raw"
+    dest = raw / "weekly" / "weekly_2025.parquet"
+    dest.parent.mkdir(parents=True)
+    pd.DataFrame({"season": [2025], "week": [1]}).to_parquet(dest, index=False)
+    contract = {"required": {"season", "week"}}
+    register_cached_parquet(
+        "weekly", dest, source="https://example.test/weekly.parquet",
+        contract=contract, season=2025, raw=raw,
+    )
+    manifest_path = tmp_path / "manifest.json"
+    first = manifest_path.read_bytes()
+    entry = json.loads(first)["files"]["weekly/weekly_2025.parquet"]
+    assert entry["provenance"] == "backfilled_from_file_mtime"
+    assert entry["rows"] == 1
+
+    # A matching verified size/mtime/version entry is a no-op (and avoids
+    # re-hashing a large historical lake on every routine ingest).
+    monkeypatch.setattr("ffdata.data.pq.read_metadata", lambda path: pytest.fail("revalidated"))
+    register_cached_parquet(
+        "weekly", dest, source="https://example.test/weekly.parquet",
+        contract=contract, season=2025, raw=raw,
+    )
+    assert manifest_path.read_bytes() == first

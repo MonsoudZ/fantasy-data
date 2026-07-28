@@ -21,7 +21,7 @@ Network access required (nflverse pulls over HTTP).
 
 | module | what |
 |---|---|
-| `sources.py` `ingest.py` `db.py` | download nflverse parquet → DuckDB views |
+| `data.py` `sources.py` `ingest.py` `db.py` | configurable lake, schema validation, atomic parquet + provenance → DuckDB views |
 | `scoring.py` | fantasy points from raw stats per `ScoringRules` (PPR/half/std/custom) |
 | `features.py` | leak-free weekly modeling table (`build_features`); opt-in flags for ngs/pfr/pbp/matchup |
 | `projections.py` | weekly GBM vs trailing baseline, walk-forward backtest |

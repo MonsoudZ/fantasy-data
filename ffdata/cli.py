@@ -10,6 +10,7 @@ import sys
 
 from .ingest import FIRST_SEASON, current_nfl_season, ingest
 from .sources import SOURCES
+from .db import RAW
 
 
 def parse_seasons(spec: str) -> list[int]:
@@ -39,6 +40,7 @@ def main() -> None:
         datasets.append("pbp")
 
     seasons = parse_seasons(args.seasons)
+    print(f"Data lake: {RAW}")
     print(f"Ingesting {datasets} for seasons {seasons[0]}-{seasons[-1]}")
     failures = ingest(datasets, seasons, force=args.force)
 

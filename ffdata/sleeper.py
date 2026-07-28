@@ -344,6 +344,7 @@ def refresh_live_status(client: "SleeperClient | None" = None, force: bool = Fal
 
     import pandas as pd
 
+    from .data import publish_parquet
     from .db import RAW
 
     dest = RAW / _LIVE_DATASET / f"{_LIVE_DATASET}.parquet"
@@ -356,8 +357,14 @@ def refresh_live_status(client: "SleeperClient | None" = None, force: bool = Fal
     rows = live_rows((client or SleeperClient()).players())
     df = pd.DataFrame(rows, columns=["gsis_id", "name_key", "position", "team",
                                      "live_code", "live_body", "live_note", "news_date"])
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(dest, index=False)
+    publish_parquet(
+        _LIVE_DATASET,
+        df,
+        dest,
+        source=f"{_BASE}/players/nfl",
+        contract={"required": set(df.columns)},
+        raw=RAW,
+    )
     flagged = int(df["live_code"].notna().sum())
     log(f"  ok    {_LIVE_DATASET}: {len(df):,} players, {flagged} flagged")
     return len(df)

@@ -1,8 +1,8 @@
 """Download nflverse datasets into a local data lake.
 
-Layout:
-    data/raw/<dataset>/<dataset>_<season>.parquet   (seasonal datasets)
-    data/raw/<dataset>/<dataset>.parquet            (non-seasonal datasets)
+Layout (under the configured raw lake):
+    <raw>/<dataset>/<dataset>_<season>.parquet   (seasonal datasets)
+    <raw>/<dataset>/<dataset>.parquet            (non-seasonal datasets)
 
 Idempotent: existing files are skipped unless force=True, except the current
 season, which is always refreshed (stats update nightly during the season).
@@ -20,7 +20,8 @@ from pathlib import Path
 import pandas as pd
 
 from .db import RAW
-from .sources import SOURCES
+from .data import publish_parquet, register_cached_parquet
+from .sources import SCHEMA_CONTRACTS, SOURCES
 
 # Weekly stats begin at 2019 under nflverse's `stats_player_week` asset; earlier
 # seasons 404 on that path. The shared data floor for CLIs and feature builds.
@@ -143,8 +144,9 @@ def _download(url: str, retries: int = 3, backoff: float = 2.0) -> bytes:
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
-def _fetch_to_parquet(url: str, dest: Path, normalize=None, season: int | None = None) -> int:
-    """Fetch a remote csv/parquet and store it as parquet. Returns row count."""
+def _fetch_to_parquet(dataset: str, url: str, dest: Path, normalize=None,
+                      season: int | None = None) -> int:
+    """Fetch, validate, atomically publish, and record one source asset."""
     blob = _download(url)
     if url.endswith(".csv"):
         df = pd.read_csv(io.BytesIO(blob), low_memory=False)
@@ -152,8 +154,8 @@ def _fetch_to_parquet(url: str, dest: Path, normalize=None, season: int | None =
         df = pd.read_parquet(io.BytesIO(blob))
     if normalize is not None:
         df = normalize(df, season)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(dest, index=False)
+    publish_parquet(dataset, df, dest, source=url, contract=SCHEMA_CONTRACTS.get(dataset),
+                    season=season, raw=RAW)
     return len(df)
 
 
@@ -187,10 +189,18 @@ def ingest(
             # so they must always refresh -- never treat them as cached.
             refresh = force or season is None or season == this_season
             if dest.exists() and not refresh:
-                log(f"  skip  {dest.relative_to(RAW.parent.parent)} (cached)")
+                try:
+                    register_cached_parquet(name, dest, source=url,
+                                            contract=SCHEMA_CONTRACTS.get(name),
+                                            season=season, raw=RAW)
+                    log(f"  skip  {dest.relative_to(RAW.parent.parent)} (cached)")
+                except Exception as exc:  # noqa: BLE001 - report invalid cached assets together
+                    log(f"  FAIL  {name}{suffix}: cached file failed validation: {exc}")
+                    failures.append((f"{name}{suffix}", str(exc)))
                 continue
             try:
-                rows = _fetch_to_parquet(url, dest, normalize=NORMALIZERS.get(name), season=season)
+                rows = _fetch_to_parquet(name, url, dest, normalize=NORMALIZERS.get(name),
+                                         season=season)
                 log(f"  ok    {name}{suffix}: {rows:,} rows")
             except Exception as exc:  # noqa: BLE001 - collect and report at the end
                 # `log` may be any callable; don't assume it accepts a `file=`

@@ -10,11 +10,9 @@ where they sit. Each dataset becomes a view that unions all seasons.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import duckdb
 
-RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
+from .data import RAW
 
 
 def connect(db_path: str = ":memory:") -> duckdb.DuckDBPyConnection:

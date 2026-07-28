@@ -13,8 +13,9 @@ projections, lineup optimization, draft/dynasty value, and player-prop edges.
 - **Scoring is config, not data.** You play on multiple platforms, so fantasy
   points are computed from raw stats per `ScoringRules`. One dataset scores
   PPR, half-PPR, TE-premium, or any custom league identically.
-- **Parquet + DuckDB, no database server.** Files land in `data/raw/`,
-  DuckDB queries them in place via views.
+- **Parquet + DuckDB, no database server.** DuckDB queries the files in place
+  via views. Existing source checkouts keep using `data/raw/`; fresh installed
+  copies use the user-writable `~/.ff-data/raw/` lake.
 
 ## Setup
 
@@ -38,6 +39,19 @@ sudo apt-get install libgomp1  # Debian/Ubuntu
 ```
 
 ## Ingest
+
+Choose a custom data location with either `FFDATA_HOME` (the lake is its `raw/`
+child) or `FFDATA_DATA` (the exact raw-lake path):
+
+```bash
+export FFDATA_HOME=/Volumes/fantasy-data       # -> /Volumes/fantasy-data/raw
+# export FFDATA_DATA=/an/exact/path/to/raw     # takes precedence
+```
+
+Every download is schema-validated and written through a verified temporary
+parquet before it atomically replaces the cached file. `manifest.json`, beside
+the `raw/` directory, records the source URL, retrieval time, row/column shape,
+byte size, and SHA-256 digest for each asset.
 
 ```bash
 python -m ffdata.cli                          # 2019-present, all core datasets
