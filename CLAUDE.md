@@ -485,10 +485,11 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   week-1 depth (`depth_team`) for played seasons — leak-free, the roster a team
   opened with — and **consensus ADP** for the upcoming season (nflverse's preseason
   depth is empty); a back with neither stays put. Runs on the vet+rookie pool
-  (before VOR) so a rookie lead back like Jeanty is ordered too. NOT yet enabled
-  in the season SIM (career improved projection yet LOST the sim, so "better
-  projection" ≠ "more titles" until swept) — flag default-off, on for the human
-  board only. **Open: run the sim sweep on reconcile.**
+  (before VOR) so a rookie lead back like Jeanty is ordered too. **Now default-on
+  in the SIM too** (`draft_boards`/`prepare`/`run_all_slots` default reconcile=True)
+  and included in the full-stack sweep — the realistic board (reconcile among the
+  live signals) wins the naive field 54% / playoff 94%, so reconcile is validated
+  in the sim, not just the projection. **Resolved.**
 - **Games-normalized blend anchor — recover injured-season stars, regress the
   injury-prone** (`project_season`, active whenever career features are on = the
   realistic default). The 0.6 blend anchor was raw prior-season POINTS, so a star
