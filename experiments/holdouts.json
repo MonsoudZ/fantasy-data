@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "description": "Regression seasons may be rerun during development. The locked season is reserved for one final evaluation and must not guide feature selection.",
+  "experiments": {
+    "weekly": {
+      "regression": 2025,
+      "locked": 2026
+    },
+    "draft": {
+      "regression": 2025,
+      "locked": 2026
+    },
+    "season": {
+      "regression": 2025,
+      "locked": 2026
+    }
+  }
+}

@@ -74,6 +74,28 @@ features, de-vig/payout math). The integration tests validate `score()` against
 nflverse's precomputed columns on the real lake, and skip automatically until
 you've ingested. CI runs the unit tests on every push.
 
+## Reproducible experiments
+
+Backtests can be recorded with the exact Git commit, configuration, runtime, and
+the SHA-256 fingerprint of every lake asset that produced them:
+
+```bash
+python -m ffdata.experiments weekly --holdout regression
+python -m ffdata.experiments draft --holdout regression --scoring ppr
+python -m ffdata.experiments season --holdout regression --opponent naive
+python -m ffdata.experiments summary
+```
+
+JSON artifacts land in `experiments/results/`; `experiments/README.md` is a
+generated comparison table. The policy in `experiments/holdouts.json` separates
+the repeatable 2025 regression season from the single-use 2026 locked holdout.
+The locked holdout cannot run until actual weekly data exists and requires the
+explicit `--consume-locked-holdout` flag; after one result is recorded, another
+run is refused unless it is explicitly forced for reproduction. Season-sim
+artifacts include deterministic bootstrap confidence intervals for mean finish,
+playoff rate, and title rate. Their sampling unit is the draft slot within one
+season, so they quantify slot sensitivity—not uncertainty across NFL seasons.
+
 ## Datasets
 
 | view          | grain                | why you care |

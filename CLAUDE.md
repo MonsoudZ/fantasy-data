@@ -32,6 +32,7 @@ Network access required (nflverse pulls over HTTP).
 | `kdst.py` | kicker + team-defense (DST) scoring & leak-free trailing projections |
 | `backtest_draft.py` | draft-and-win backtest; grades with a HINDSIGHT lineup (isolates draft value only) |
 | `season_sim.py` | blind season replay: all 12 teams drafted + managed on projections; naive/sharp fields |
+| `experiment_registry.py` `experiments.py` | manifest-pinned JSON experiments, locked holdouts, bootstrap CIs + generated summary |
 | `betting.py` | American-odds / de-vig math + empirical P(over), shared by props/gamelines |
 | `props.py` | player-prop edge finder (per-stat models; you supply odds) |
 | `gamelines.py` | game total/spread/moneyline forecast vs market (informational; lines from `schedules`) |
