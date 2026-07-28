@@ -490,6 +490,18 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the body part on the injury flag — fade Nabers yourself if his concussions worry
   you), not a model input. Same context-vs-input lesson as schedule/scheme/workload.
   Off-field/suspension risk (Rice's legal case) the model can't see at all.
+- **QB/TE streamability discount tightened to 0.35/0.50** (`_STREAM_DISCOUNT`, in
+  `score_board`). We ranked QB/TE HIGHER than consensus ADP — Mahomes (CBS 94),
+  Kittle (CBS 101), Kraft (CBS 110) go ~50 spots later than our board had them —
+  so the old 0.50/0.70 discount was too light vs how hard the market waits on
+  streamable positions. Swept the discount vs the SHARP field, 4 seasons × 12
+  slots: mean finish **0.50/0.70 → 6.54, 0.35/0.50 → 6.42 (best), 0.25/0.40 →
+  7.38** — a clean inverted-U. The optimum is BETWEEN us and consensus: the market
+  over-fades (heaviest tanks), but we were too light. Tightened to 0.35/0.50 — the
+  elite QB now lands on consensus (Josh Allen us #35 / CBS #36) while the mid-tier
+  stays a bit above market (correctly — the sweep says don't fade as hard as CBS).
+  Modest win (0.12 mean place) but the U-shape says it's a real curve, and it
+  aligns with the gap. Applies to every board incl. the sim.
 - **Rookie projections: the MEANS are mostly fine — it's the mid-rounds that ran
   hot** (`rookie_projection` now self-calibrates by pick tier; `_rookie_tier`).
   Measured the draft-capital model vs actual rookie-season points, 2022-25, by

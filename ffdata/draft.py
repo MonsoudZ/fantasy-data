@@ -1079,7 +1079,12 @@ _AVAIL_PENALTY = {
 _LIVE_PENALTY = {"IR": 0.35, "PUP": 0.5, "NA": 0.5, "Sus": 0.6, "DNR": 0.65, "Out": 0.9}
 # Streamability discount on VOR: a startable replacement is cheap at QB/TE (you
 # start one and can stream), so an elite one is worth less than raw VOR says.
-_STREAM_DISCOUNT = {"QB": 0.5, "TE": 0.7}
+# We ranked QB/TE higher than consensus ADP (Mahomes/Kittle went ~50 spots later
+# in the market), so the old 0.50/0.70 was too light. Swept vs the SHARP field:
+# mean finish 0.50/0.70 -> 6.54, 0.35/0.50 -> 6.42 (best), 0.25/0.40 -> 7.38 -- a
+# clean inverted-U. The optimum sits BETWEEN us and consensus (the market over-
+# fades; the heaviest discount tanks). Tightened to the measured best.
+_STREAM_DISCOUNT = {"QB": 0.35, "TE": 0.5}
 
 
 def availability_penalty(board: pd.DataFrame, target_season: int,
