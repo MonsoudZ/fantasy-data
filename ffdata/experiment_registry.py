@@ -26,6 +26,7 @@ DEFAULT_POLICY = {
         "weekly": {"regression": 2025, "locked": 2026},
         "draft": {"regression": 2025, "locked": 2026},
         "season": {"regression": 2025, "locked": 2026},
+        "season-sweep": {"regression": 2025, "locked": 2026},
     },
 }
 
@@ -141,6 +142,31 @@ def bootstrap_mean_ci(
         "resamples": resamples,
         "n": int(arr.size),
     }
+
+
+def bootstrap_cluster_mean_ci(
+    clusters: Iterable[Iterable[float]],
+    *,
+    confidence: float = 0.95,
+    resamples: int = 2000,
+    seed: int = 0,
+) -> dict:
+    """Percentile interval for a mean, resampling whole clusters.
+
+    Each cluster contributes equally through its within-cluster mean. For season
+    simulations a cluster is one NFL season and its observations are draft slots,
+    so the interval reflects variation across seasons instead of pretending that
+    twelve replays of one real season are twelve independent football histories.
+    """
+    arrays = [np.asarray(list(cluster), dtype=float) for cluster in clusters]
+    if not arrays or any(arr.size == 0 for arr in arrays):
+        raise ValueError("cannot bootstrap empty clusters")
+    means = np.asarray([arr.mean() for arr in arrays])
+    result = bootstrap_mean_ci(
+        means, confidence=confidence, resamples=resamples, seed=seed,
+    )
+    result.update(n_clusters=len(arrays), n=int(sum(arr.size for arr in arrays)))
+    return result
 
 
 def _run_git(args: list[str], root: Path) -> str | None:
@@ -269,7 +295,37 @@ def metric_summary(record: dict) -> str:
                     f"{_fmt_ci(cis['title_rate'], percent=True)}")
         return (f"finish {metrics.get('mean_finish', '—')}; playoffs "
                 f"{metrics.get('playoff_rate', '—')}; titles {metrics.get('title_rate', '—')}")
+    if kind == "season-sweep":
+        fields = metrics.get("field_strengths", [])
+        if fields:
+            first, last = fields[0], fields[-1]
+            compact = lambda row: (  # noqa: E731 - keeps the endpoint rendering parallel
+                f"finish {row.get('mean_finish', '—')}, "
+                f"playoffs {row.get('playoff_rate', 0) * 100:.1f}%, "
+                f"titles {row.get('title_rate', 0) * 100:.1f}%"
+            )
+            return (f"{first.get('sharp_fraction', 0) * 100:.0f}% sharp: {compact(first)}; "
+                    f"{last.get('sharp_fraction', 1) * 100:.0f}%: {compact(last)}")
     return json.dumps(metrics, sort_keys=True)[:160]
+
+
+def variant_summary(record: dict) -> str:
+    """Compact configuration label so unlike experiment variants stay distinct."""
+    config, kind = record.get("config", {}), record.get("kind")
+    if kind == "season":
+        return str(config.get("opponent", "—"))
+    if kind == "draft":
+        return f"{config.get('board', '—')} · {config.get('scoring', '—')}"
+    if kind == "weekly":
+        return "LightGBM vs trailing"
+    if kind == "season-sweep":
+        seasons = config.get("seasons", [])
+        fractions = config.get("sharp_fractions", [])
+        season_label = (f"{min(seasons)}–{max(seasons)}" if seasons else "—")
+        fraction_label = (f"{min(fractions) * 100:.0f}–{max(fractions) * 100:.0f}% sharp"
+                          if fractions else "—")
+        return f"{season_label} · {fraction_label}"
+    return "—"
 
 
 def render_summary(results_dir: Path, output: Path | None = None) -> str:
@@ -286,8 +342,8 @@ def render_summary(results_dir: Path, output: Path | None = None) -> str:
         lines.append("No experiment results recorded yet.")
     else:
         lines.extend([
-            "| Date | Experiment | Holdout | Code | Result |",
-            "|---|---|---|---|---|",
+            "| Date | Experiment | Variant | Holdout | Code | Result |",
+            "|---|---|---|---|---|---|",
         ])
         for row in records:
             git = row.get("git", {})
@@ -295,7 +351,8 @@ def render_summary(results_dir: Path, output: Path | None = None) -> str:
             holdout = row.get("holdout", {})
             date = row.get("created_at", "")[:10]
             lines.append(
-                f"| {date} | {row.get('kind')} | {holdout.get('season')} "
+                f"| {date} | {row.get('kind')} | {variant_summary(row)} | "
+                f"{holdout.get('season')} "
                 f"({holdout.get('tier')}) | `{commit}` | {metric_summary(row)} |"
             )
     text = "\n".join(lines) + "\n"

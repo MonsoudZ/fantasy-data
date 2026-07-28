@@ -501,7 +501,29 @@ def _jitter(name: str, team: int, scale: float) -> float:
     return (h / 0xFFFFFFFF - 0.5) * 2 * scale
 
 
-def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise):
+def _sharp_opponents(n_teams: int, our_slot: int, opponent: str,
+                     sharp_fraction: float = 0.5) -> set[int]:
+    """Return the deterministic set of opponents that use a sharp draft board.
+
+    Mixed fields rotate clockwise from our slot. That keeps the requested field
+    composition exact and reproducible while avoiding a fixed set of team IDs
+    receiving the sharp strategy in every draft-slot replay.
+    """
+    if opponent not in {"naive", "mixed", "sharp"}:
+        raise ValueError("opponent must be 'naive', 'mixed', or 'sharp'")
+    if not 0 <= sharp_fraction <= 1:
+        raise ValueError("sharp_fraction must be between 0 and 1")
+    opponents = [(our_slot + offset) % n_teams for offset in range(1, n_teams)]
+    if opponent == "naive":
+        return set()
+    if opponent == "sharp":
+        return set(opponents)
+    count = int((len(opponents) * sharp_fraction) + 0.5)
+    return set(opponents[:count])
+
+
+def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise,
+                      sharp_fraction=0.5):
     """The board each team drafts from.
 
     - "naive": opponents rank by last year's RAW points. They hoard QBs (a QB
@@ -511,17 +533,21 @@ def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise):
     - "sharp": opponents draft off the SAME VOR board we do, each reranked by its
       own `_jitter` (differing opinions). Now everyone drafts well and our only
       edge is being the *un-noised* board -- the honest, hard test.
+    - "mixed": a deterministic fraction of opponents is sharp and the rest is
+      naive, allowing a field-strength curve rather than two isolated endpoints.
     """
-    if opponent == "sharp":
-        boards = []
-        for t in range(n_teams):
-            if t == our_slot or noise <= 0:
-                boards.append(ours)
-            else:
-                boards.append(sorted(ours, key=lambda p: -(p["proj"]
-                                     + _jitter(p["player"], t, noise))))
-        return boards
-    return [ours if t == our_slot else naive for t in range(n_teams)]
+    sharp = _sharp_opponents(n_teams, our_slot, opponent, sharp_fraction)
+    boards = []
+    for t in range(n_teams):
+        if t == our_slot:
+            boards.append(ours)
+        elif t in sharp:
+            boards.append(ours if noise <= 0 else sorted(
+                ours, key=lambda p: -(p["proj"] + _jitter(p["player"], t, noise)),
+            ))
+        else:
+            boards.append(naive)
+    return boards
 
 
 def _overall_pick(rnd0: int, our_slot: int, n_teams: int) -> int:
@@ -612,7 +638,7 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                our_slot: int = 0, projector: str = "gbm", waivers: bool = True,
                con=None, log=print, ctx: dict | None = None, detail: bool = False,
                league_waivers: bool = True, opponent: str = "naive",
-               noise: float = 24.0) -> dict:
+               noise: float = 24.0, sharp_fraction: float = 0.5) -> dict:
     """Draft blind, manage every week on projections only, report the whole league.
 
     EVERY team is managed the same way -- best lineup by projection each week, and
@@ -632,12 +658,15 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     project, by_week, n_teams = ctx["project"], ctx["by_week"], ctx["n_teams"]
 
     log(f"Snake draft: {n_teams} teams x {ROSTER_SIZE} rounds, we pick at slot {our_slot + 1}")
-    boards = _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise)
+    sharp = _sharp_opponents(n_teams, our_slot, opponent, sharp_fraction)
+    boards = _draft_boards_for(
+        ours, naive, n_teams, our_slot, opponent, noise, sharp_fraction,
+    )
     # We draft to roster need (fill 2RB/2WR/1TE/FLEX/QB/K/DEF starters before
     # bench depth), so we don't hoard RBs and end up with scrap WRs. A sharp field
     # drafts the same way (competent managers balance); the naive field keeps its
     # defining flaw -- raw-points greed that hoards QBs.
-    need_aware = set(range(n_teams)) if opponent == "sharp" else {our_slot}
+    need_aware = sharp | {our_slot}
     rosters = _roster_aware_draft(boards, need_aware, ROSTER_SIZE, LIMITS)
     drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
@@ -798,7 +827,8 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
                   projector: str = "gbm", waivers: bool = True, con=None,
                   log=print, opponent: str = "naive", noise: float = 24.0,
                   career: bool = True, upside_weight: float = UPSIDE_WEIGHT,
-                  competition: bool = True, reconcile: bool = True) -> dict:
+                  competition: bool = True, reconcile: bool = True,
+                  sharp_fraction: float = 0.5, ctx: dict | None = None) -> dict:
     """Replay the season from EVERY draft slot and report the distribution.
 
     One season from one slot is a single sample: draft position and the
@@ -807,14 +837,15 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
     twelve against the identical league turns one real season into a spread --
     a finish distribution and a title rate, not an anecdote.
     """
-    ctx = prepare(season, rules, projector, n_teams, con, log,
-                  career=career, upside_weight=upside_weight,
-                  competition=competition, reconcile=reconcile)
+    ctx = ctx or prepare(season, rules, projector, n_teams, con, log,
+                         career=career, upside_weight=upside_weight,
+                         competition=competition, reconcile=reconcile)
     runs = []
     for slot in range(n_teams):
         r = run_season(season, rules, n_teams, slot, projector, waivers,
                        con, log=lambda *a: None, ctx=ctx,
-                       opponent=opponent, noise=noise)
+                       opponent=opponent, noise=noise,
+                       sharp_fraction=sharp_fraction)
         runs.append(r)
         log(f"  slot {slot + 1:2d}: finished {r['regular_season_place']:2d} of {n_teams}"
             f"  ({'CHAMPION' if r['we_won'] else 'no title'})")

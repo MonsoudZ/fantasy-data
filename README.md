@@ -83,6 +83,7 @@ the SHA-256 fingerprint of every lake asset that produced them:
 python -m ffdata.experiments weekly --holdout regression
 python -m ffdata.experiments draft --holdout regression --scoring ppr
 python -m ffdata.experiments season --holdout regression --opponent naive
+python -m ffdata.experiments season-sweep --holdout regression
 python -m ffdata.experiments summary
 ```
 
@@ -95,6 +96,10 @@ run is refused unless it is explicitly forced for reproduction. Season-sim
 artifacts include deterministic bootstrap confidence intervals for mean finish,
 playoff rate, and title rate. Their sampling unit is the draft slot within one
 season, so they quantify slot sensitivity—not uncertainty across NFL seasons.
+The `season-sweep` benchmark replays 2022–2025 across 0%, 25%, 50%, 75%, and
+100% sharp opponents. It reuses each season's fitted context, pairs every field
+strength by draft slot, and resamples whole NFL seasons for uncertainty that
+reflects year-to-year variation.
 
 ## Datasets
 

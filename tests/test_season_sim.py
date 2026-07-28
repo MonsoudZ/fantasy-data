@@ -287,6 +287,53 @@ def test_sharp_opponents_draft_by_value_naive_opponents_hoard_qbs():
     assert [p["player"] for p in sb[1]] != [p["player"] for p in ours]  # but reranked
 
 
+def test_mixed_field_has_deterministic_composition_and_exact_endpoints():
+    from ffdata.season_sim import _draft_boards_for, _sharp_opponents
+
+    ours = [{"player": f"P{i}", "position": "RB", "proj": 200 - i} for i in range(20)]
+    naive = [{"player": f"Q{i}", "position": "QB", "proj": 300 - i} for i in range(20)]
+
+    sharp = _sharp_opponents(12, our_slot=3, opponent="mixed", sharp_fraction=0.5)
+    assert sharp == {4, 5, 6, 7, 8, 9}
+    mixed = _draft_boards_for(
+        ours, naive, 12, our_slot=3, opponent="mixed", noise=24, sharp_fraction=0.5,
+    )
+    assert sum(board is naive for board in mixed) == 5
+    assert sum({p["player"] for p in board} == {p["player"] for p in ours}
+               for team, board in enumerate(mixed) if team != 3) == 6
+
+    naive_endpoint = _draft_boards_for(
+        ours, naive, 12, 3, "mixed", 24, sharp_fraction=0,
+    )
+    sharp_endpoint = _draft_boards_for(
+        ours, naive, 12, 3, "mixed", 24, sharp_fraction=1,
+    )
+    assert [board is naive for board in naive_endpoint] == [
+        board is naive for board in _draft_boards_for(ours, naive, 12, 3, "naive", 24)
+    ]
+    assert sharp_endpoint == _draft_boards_for(ours, naive, 12, 3, "sharp", 24)
+
+
+def test_run_all_slots_accepts_a_reusable_context(monkeypatch):
+    import ffdata.season_sim as season_sim
+
+    ctx = {"prepared": True}
+    seen = []
+    monkeypatch.setattr(
+        season_sim, "prepare", lambda *args, **kwargs: pytest.fail("context was rebuilt"),
+    )
+
+    def fake_run_season(*args, **kwargs):
+        seen.append(kwargs["ctx"])
+        slot = args[3]
+        return {"regular_season_place": slot + 1, "we_won": slot == 0}
+
+    monkeypatch.setattr(season_sim, "run_season", fake_run_season)
+    result = season_sim.run_all_slots(2025, n_teams=3, ctx=ctx, log=lambda *a: None)
+    assert seen == [ctx, ctx, ctx]
+    assert result["places"] == [1, 2, 3]
+
+
 def test_jitter_is_deterministic_and_bounded():
     """No RNG (the sandbox forbids it) -- a hash, so the whole sim reproduces."""
     from ffdata.season_sim import _jitter
