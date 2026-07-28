@@ -499,6 +499,25 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   rookie year, no career to blend) — that stays a young-small-sample / human-
   override case. `_prior_anchor` is shared by the projection AND the age-cal
   training anchor so they stay consistent.
+- **ROLE-aware expected games: a depth-chart STARTER is projected near a full
+  season, so his VOR reflects the role, not a limited sample** (`_starter_seasons`,
+  `_STARTER_GAMES`/`_STARTER_GAMES_K`, in `_prior_anchor`). Root of the "why is
+  Hampton so low" complaint: VOR = projection − replacement, and the projection
+  anchors on last year's GAMES — a young back stepping into the lead role (Hampton:
+  9-game rookie year) reads as a 9-game player, so his VOR never shows he's the
+  bellcow. The role signal existed (reconciliation/`blocked_by`) but only REORDERED
+  a room, never LIFTED it. Fix: regress a STARTER's expected games toward a full
+  season (`c_games_avg` × sample-size shrink toward 15.5). **Must be gated on
+  starter status** — the blanket version (bump every young/limited player)
+  scrambled the young-player RANK because it raised busts too; gating on the
+  depth chart lifts the real starters only. Backtest 2022-25: overall rank
+  **0.6826 → ~0.690** (+0.007, monotonic to a near-full-season expectation — a
+  starter's career-avg games systematically UNDER-count him), MAE better. Starter
+  source: nflverse week-1 `depth_team=1` (leak-free) historically; consensus ADP
+  (low-ADP-at-position = starter) for the upcoming season, since nflverse preseason
+  depth is empty. Effect: Hampton #107 → **#37** (proj 144 → 196, VOR −2 → +39),
+  TreVeyon Henderson → #30, CMC back to #7. QBs move little (their games were
+  already full; their low overall rank is the streamability discount, not role).
 - **Injury TYPE does NOT predict future availability — regression to the mean wins**
   (prototype only, not shipped). Chased the intuition that recurring/serious
   injuries (concussion, ACL, chronic soft-tissue) should fade a player harder than

@@ -60,27 +60,76 @@ _PARAMS = gbm_params(n_estimators=400, num_leaves=31, min_child_samples=20)
 # prior-year anchor keeps proven volume honest. Validated on 2023-24.
 _BLEND = 0.4  # weight on the model; 1 - _BLEND on prior-season total
 _ANCHOR_CAREER_W = 0.5  # in the blend anchor's RATE, weight on career ppg vs last year
+_STARTER_GAMES = 15.5   # a depth-chart STARTER is expected near a full season...
+_STARTER_GAMES_K = 8.0  # ...regressed from that toward his career games by sample size
+# For the 2026 ADP fallback: how many at each position count as starters (12-team-ish,
+# starters + flex): a low-ADP RB/WR is a starter, TE/QB shallower.
+_ADP_STARTER_N = {"RB": 32, "WR": 40, "TE": 15, "QB": 15}
 
 
-def _prior_anchor(frame: pd.DataFrame, schedule: bool = False) -> pd.Series:
+def _starter_seasons(con, target_season: int, rules: ScoringRules = PPR) -> set:
+    """(player_id, season) pairs where a player was his position's week-1 STARTER.
+
+    A starter plays ~a full season even if his CAREER-average games are dragged down
+    by a limited/injured sample (a young back stepping into the lead role), so the
+    anchor should expect near-full games for him -- measured a real accuracy win.
+    Source: nflverse week-1 `depth_team = 1` (leak-free, preseason). The upcoming
+    season has no nflverse depth yet, so fall back to consensus ADP: a low-ADP
+    player at his position is the market's starter (this is how the 2026 board gets
+    Hampton the bellcow's games, not his 9-game rookie sample)."""
+    from .optimize import _norm
+    out = set()
+    if _has_view(con, "depth_charts"):
+        try:
+            d = con.sql("""select distinct gsis_id, season from depth_charts
+                           where week = 1 and depth_team = '1' and gsis_id is not null
+                           and depth_position in ('QB','RB','WR','TE')""").df()
+            out = {(p, int(s)) for p, s in zip(d["gsis_id"], d["season"])}
+        except Exception:  # noqa: BLE001
+            out = set()
+    if target_season not in {s for _, s in out}:              # upcoming season -> ADP fallback
+        adp = _consensus_adp(con)
+        if adp:
+            agg = _season_agg(con, rules).sort_values("season").groupby("player_id").tail(1)
+            agg = agg[["player_id", "player", "position"]].copy()
+            agg["adp"] = agg["player"].map(lambda n: adp.get(_norm(n)) if isinstance(n, str) else None)
+            agg = agg.dropna(subset=["adp"])
+            for pos, g in agg.groupby("position"):
+                top = g.nsmallest(_ADP_STARTER_N.get(pos, 20), "adp")
+                out |= {(pid, int(target_season)) for pid in top["player_id"]}
+    return out
+
+
+def _prior_anchor(frame: pd.DataFrame, starters: set | None = None,
+                  schedule: bool = False) -> pd.Series:
     """The 0.6 blend anchor: games-normalized, career-blended prior production.
 
-    Two corrections over raw season points, both measured wins:
+    Three corrections over raw season points, all measured wins:
       * GAMES: use per-game RATE x career-typical games, so a missed-game year
         reads as a rate not a ceiling (Nabers 4 games -> not buried).
       * RATE: blend last-year ppg with the recency-weighted CAREER ppg (half each),
         so a down/injured season (Lamar 2025) is pulled toward the player's norm
-        and a one-year breakout is regressed -- measured +0.004 rank overall,
-        +0.010 on the down-year subset. Falls back to raw points (or schedule-
-        adjusted points) without career features.
+        and a one-year breakout is regressed (+0.004 rank; +0.010 down-year subset).
+      * ROLE: a depth-chart STARTER's expected games are regressed toward a full
+        season (his career games under-count a young player stepping into the lead
+        role) -- so his VOR finally reflects the role, not his limited sample
+        (Hampton). Gated on starter status so it lifts starters, not busts
+        (+0.007 rank overall; the blanket version scrambled the young-player order).
+    Falls back to raw points (or schedule-adjusted) without career features.
     """
     if "c_games_avg" not in frame.columns:
         col = "p_fp_adj" if (schedule and "p_fp_adj" in frame.columns) else "p_fp"
         return frame[col]
     last_ppg = frame["p_fp"] / frame["p_games"].clip(lower=1)
     rate = _ANCHOR_CAREER_W * frame["c_ppg_wavg"].fillna(last_ppg) + (1 - _ANCHOR_CAREER_W) * last_ppg
-    g_exp = frame["c_games_avg"].fillna(frame["p_games"]).clip(lower=8, upper=17)
-    return rate * g_exp
+    cga = frame["c_games_avg"].fillna(frame["p_games"])
+    g_exp = cga
+    if starters:
+        ns = frame["c_seasons"].fillna(1).clip(lower=1) if "c_seasons" in frame.columns else 1
+        shrunk = (cga * ns + _STARTER_GAMES * _STARTER_GAMES_K) / (ns + _STARTER_GAMES_K)
+        is_st = [(p, int(s)) in starters for p, s in zip(frame["player_id"], frame["tseason"])]
+        g_exp = pd.Series(np.where(is_st, shrunk, cga), index=frame.index)
+    return rate * g_exp.clip(lower=8, upper=17)
 
 
 def _season_agg(con, rules: ScoringRules = PPR) -> pd.DataFrame:
@@ -587,15 +636,16 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
         return test
     model = lgb.LGBMRegressor(**_PARAMS).fit(train[feats], train["target_fp"])
     model_pts = np.clip(model.predict(test[feats]), 0, None)
-    # Blend the model with the games-normalized, career-blended prior anchor.
-    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * _prior_anchor(test, schedule)).clip(lower=0)
+    # Blend the model with the games-normalized, career-blended, role-aware anchor.
+    starters = _starter_seasons(con, target_season, rules)
+    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * _prior_anchor(test, starters, schedule)).clip(lower=0)
 
     # Age calibration (gentle): scale each player by his position/age cohort's
     # realized-vs-projected ratio, learned leak-free from the training rows (same
     # blend), clamped and applied at 1/3 strength. Lifts the young, trims the old.
     tr = train.copy()
     tr_model = np.clip(model.predict(tr[feats]), 0, None)
-    tr["_proj"] = (_BLEND * tr_model + (1 - _BLEND) * _prior_anchor(tr, schedule)).clip(lower=0)
+    tr["_proj"] = (_BLEND * tr_model + (1 - _BLEND) * _prior_anchor(tr, starters, schedule)).clip(lower=0)
     tr = tr[tr["target_fp"] >= 20]
     tr["_ab"] = tr["age"].map(_age_bin)
     tr["_pg"] = tr["position"].map(_age_posgrp)
