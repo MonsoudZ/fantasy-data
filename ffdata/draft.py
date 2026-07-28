@@ -59,6 +59,28 @@ _PARAMS = gbm_params(n_estimators=400, num_leaves=31, min_child_samples=20)
 # breakouts); a blend beats both -- the model handles age/injury/regression, the
 # prior-year anchor keeps proven volume honest. Validated on 2023-24.
 _BLEND = 0.4  # weight on the model; 1 - _BLEND on prior-season total
+_ANCHOR_CAREER_W = 0.5  # in the blend anchor's RATE, weight on career ppg vs last year
+
+
+def _prior_anchor(frame: pd.DataFrame, schedule: bool = False) -> pd.Series:
+    """The 0.6 blend anchor: games-normalized, career-blended prior production.
+
+    Two corrections over raw season points, both measured wins:
+      * GAMES: use per-game RATE x career-typical games, so a missed-game year
+        reads as a rate not a ceiling (Nabers 4 games -> not buried).
+      * RATE: blend last-year ppg with the recency-weighted CAREER ppg (half each),
+        so a down/injured season (Lamar 2025) is pulled toward the player's norm
+        and a one-year breakout is regressed -- measured +0.004 rank overall,
+        +0.010 on the down-year subset. Falls back to raw points (or schedule-
+        adjusted points) without career features.
+    """
+    if "c_games_avg" not in frame.columns:
+        col = "p_fp_adj" if (schedule and "p_fp_adj" in frame.columns) else "p_fp"
+        return frame[col]
+    last_ppg = frame["p_fp"] / frame["p_games"].clip(lower=1)
+    rate = _ANCHOR_CAREER_W * frame["c_ppg_wavg"].fillna(last_ppg) + (1 - _ANCHOR_CAREER_W) * last_ppg
+    g_exp = frame["c_games_avg"].fillna(frame["p_games"]).clip(lower=8, upper=17)
+    return rate * g_exp
 
 
 def _season_agg(con, rules: ScoringRules = PPR) -> pd.DataFrame:
@@ -565,33 +587,15 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
         return test
     model = lgb.LGBMRegressor(**_PARAMS).fit(train[feats], train["target_fp"])
     model_pts = np.clip(model.predict(test[feats]), 0, None)
-    # Blend with a prior-season anchor. Raw season POINTS undercount anyone who
-    # missed games -- a 4-game injured star reads as a low-volume scrub (Nabers:
-    # 271 yds -> buried). When career features are on, anchor on his PER-GAME rate
-    # times his career-typical games instead (games-normalized), so an injury year
-    # is read as a rate, not a ceiling. Measured +0.013 rank / -1.1 MAE overall and
-    # most on the injured subset. Durability-capped (8-17): naive x17 over-projects
-    # the chronically fragile. Falls back to raw points without career features
-    # (and to schedule-adjusted points when that flag is on).
-    if "c_games_avg" in test.columns:
-        ppg = test["p_fp"] / test["p_games"].clip(lower=1)
-        g_exp = test["c_games_avg"].fillna(test["p_games"]).clip(lower=8, upper=17)
-        anchor = ppg * g_exp
-    else:
-        anchor = test["p_fp_adj"] if schedule else test["p_fp"]
-    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * anchor).clip(lower=0)
+    # Blend the model with the games-normalized, career-blended prior anchor.
+    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * _prior_anchor(test, schedule)).clip(lower=0)
 
     # Age calibration (gentle): scale each player by his position/age cohort's
     # realized-vs-projected ratio, learned leak-free from the training rows (same
     # blend), clamped and applied at 1/3 strength. Lifts the young, trims the old.
     tr = train.copy()
     tr_model = np.clip(model.predict(tr[feats]), 0, None)
-    if "c_games_avg" in tr.columns:
-        tr_anchor = (tr["p_fp"] / tr["p_games"].clip(lower=1)) * \
-            tr["c_games_avg"].fillna(tr["p_games"]).clip(lower=8, upper=17)
-    else:
-        tr_anchor = tr["p_fp"]
-    tr["_proj"] = (_BLEND * tr_model + (1 - _BLEND) * tr_anchor).clip(lower=0)
+    tr["_proj"] = (_BLEND * tr_model + (1 - _BLEND) * _prior_anchor(tr, schedule)).clip(lower=0)
     tr = tr[tr["target_fp"] >= 20]
     tr["_ab"] = tr["age"].map(_age_bin)
     tr["_pg"] = tr["position"].map(_age_posgrp)

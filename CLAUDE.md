@@ -485,7 +485,20 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   earlier a standalone workload FEATURE didn't rank, but folding availability into
   the anchor (rate × expected games) does, because it fixes the volume the totals
   misstate. Leak-free (`c_games_avg` uses seasons ≤ prior). Falls back to raw
-  points without career features.
+  points without career features. **Extended with a MULTI-YEAR rate blend**
+  (`_prior_anchor`, `_ANCHOR_CAREER_W = 0.5`): the anchor's per-game RATE is now
+  half last-year ppg + half recency-weighted CAREER ppg (`c_ppg_wavg`), so a
+  down/injured SEASON (not just missed games) is pulled toward the player's norm
+  and a one-year breakout is regressed. Sweep of the career weight: overall rank
+  0.6782 → **0.6826** at 0.5 (+0.0044), MAE 40.9 → 40.7, and the DOWN-year subset
+  (last ppg < 0.85× career) most: rank 0.5324 → 0.5426 (+0.010), MAE −1.0. Optimum
+  plateaus 0.3-0.5; pure-career (0.0) slightly worsens MAE, so 0.5 (equal blend) is
+  the pick. Moves Lamar 232 → 247, Nabers 137 → 146 — but only PARTLY toward their
+  ceilings, because the accuracy optimum does NOT fully trust bounce-backs (many
+  down-year players don't recover). Can't help a ONE-season player (Hampton: 9-game
+  rookie year, no career to blend) — that stays a young-small-sample / human-
+  override case. `_prior_anchor` is shared by the projection AND the age-cal
+  training anchor so they stay consistent.
 - **Injury TYPE does NOT predict future availability — regression to the mean wins**
   (prototype only, not shipped). Chased the intuition that recurring/serious
   injuries (concussion, ACL, chronic soft-tissue) should fade a player harder than
