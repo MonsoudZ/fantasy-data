@@ -473,6 +473,23 @@ python -m ffdata.web                                # http://127.0.0.1:8000
   the anchor (rate × expected games) does, because it fixes the volume the totals
   misstate. Leak-free (`c_games_avg` uses seasons ≤ prior). Falls back to raw
   points without career features.
+- **Injury TYPE does NOT predict future availability — regression to the mean wins**
+  (prototype only, not shipped). Chased the intuition that recurring/serious
+  injuries (concussion, ACL, chronic soft-tissue) should fade a player harder than
+  a one-off — the Nabers (concussion history) / Rice (chronic hamstrings + concussion)
+  case. Two measurements killed it: (1) among skill players ruled Out with a type
+  in year S, next-year games missed vs the 6.41 baseline — concussion **6.02**,
+  knee 6.12, soft-tissue 5.91, foot/ankle 5.37: NO type predicts MORE future
+  missed games; they all regress toward/below the mean (injured players recover).
+  (2) A recency-weighted serious-injury feature on the career+comp stack, 2022-25:
+  overall rank flat (0.6656 → 0.6657), MAE worse, and it HURT the injured subset
+  it targeted (0.5432 → 0.5374) — the model treats type as spurious noise. Why:
+  for every Nabers who stays hurt there's a same-type player who bounces back, and
+  type can't separate them. So the games-missed anchor already captures the
+  predictable part; injury TYPE is human-judgment CONTEXT (the board already names
+  the body part on the injury flag — fade Nabers yourself if his concussions worry
+  you), not a model input. Same context-vs-input lesson as schedule/scheme/workload.
+  Off-field/suspension risk (Rice's legal case) the model can't see at all.
 - **Rookie projections: the MEANS are mostly fine — it's the mid-rounds that ran
   hot** (`rookie_projection` now self-calibrates by pick tier; `_rookie_tier`).
   Measured the draft-capital model vs actual rookie-season points, 2022-25, by
