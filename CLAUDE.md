@@ -92,6 +92,19 @@ python -m ffdata.web                                # http://127.0.0.1:8000
 - Draft: the season GBM alone loses to naive "last year's points"; the shipped
   projection is a **0.4-model / 0.6-prior blend** (rank ~0.72). Delta-method age
   curves: RB peaks ~24 (cliff), WR ~25, TE ages gracefully.
+- **Age is miscalibrated the OPPOSITE way you'd guess -- we UNDER-project the
+  young, OVER-project the old** (`_age_bin`, `_age_posgrp`, `_AGE_CAL_STRENGTH`, in
+  `project_season`). `age` is a model feature, but out of sample the residual is
+  systematic: actual/proj by cohort -- **≤25: RB 1.16 / WR-TE 1.13 / QB 1.04-1.32,
+  30+: WR-TE 0.87 / QB 0.93, 28-29 RB 0.89**. So the fade isn't too harsh, it's too
+  FLAT (under-rewards youth). NB this contradicts the Barkley-is-too-low intuition:
+  28-29 RBs are OVER-projected on average, so an elite outlier the market prices
+  individually (Barkley 29) the model can't rescue -- the data says fade him more,
+  not less. Fix: gentle leak-free cohort calibration (ratios from the training
+  rows, clamped 0.8-1.25, applied at **1/3 strength**). Strength sweep: rank
+  0.6782 → 0.6803 (+0.002) at 1/3 with ~0 MAE cost; FULL strength gets the same
+  rank but +1.1 MAE (over-adjusts). Modest but clean, and the top of the board
+  aligns better with consensus (young studs rise). Applies to every board + sim.
 - **The draft edge is almost entirely "don't hoard QBs."** `season_sim` plays a
   real past season blind: draft off the preseason board, then manage every one of
   the 12 teams on projections only (start-by-projection, worst-first waivers on

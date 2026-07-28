@@ -579,7 +579,31 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
         anchor = ppg * g_exp
     else:
         anchor = test["p_fp_adj"] if schedule else test["p_fp"]
-    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * anchor).clip(lower=0).round(1)
+    test["proj"] = (_BLEND * model_pts + (1 - _BLEND) * anchor).clip(lower=0)
+
+    # Age calibration (gentle): scale each player by his position/age cohort's
+    # realized-vs-projected ratio, learned leak-free from the training rows (same
+    # blend), clamped and applied at 1/3 strength. Lifts the young, trims the old.
+    tr = train.copy()
+    tr_model = np.clip(model.predict(tr[feats]), 0, None)
+    if "c_games_avg" in tr.columns:
+        tr_anchor = (tr["p_fp"] / tr["p_games"].clip(lower=1)) * \
+            tr["c_games_avg"].fillna(tr["p_games"]).clip(lower=8, upper=17)
+    else:
+        tr_anchor = tr["p_fp"]
+    tr["_proj"] = (_BLEND * tr_model + (1 - _BLEND) * tr_anchor).clip(lower=0)
+    tr = tr[tr["target_fp"] >= 20]
+    tr["_ab"] = tr["age"].map(_age_bin)
+    tr["_pg"] = tr["position"].map(_age_posgrp)
+    cal = (tr.groupby(["_pg", "_ab"]).apply(
+        lambda g: g["target_fp"].sum() / max(g["_proj"].sum(), 1.0), include_groups=False)).to_dict()
+
+    def _factor(pos, age):
+        r = cal.get((_age_posgrp(pos), _age_bin(age)), 1.0)
+        return 1 + _AGE_CAL_STRENGTH * (min(max(r, 0.8), 1.25) - 1)
+
+    test["proj"] = (test["proj"] * [_factor(p, a) for p, a in
+                    zip(test["position"], test["age"])]).clip(lower=0).round(1)
     return test[["player_id", "player", "position", "proj"]].sort_values("proj", ascending=False)
 
 
@@ -599,6 +623,24 @@ def project_season(target_season: int, rules: ScoringRules = PPR, con=None,
 # expect ~0.57 rank and ~45 pts MAE, so treat rookie values as a prior, not a
 # projection. Re-check with backtest_rookies().
 # --------------------------------------------------------------------------- #
+# Age calibration for the season projection. The model uses `age` as a feature but
+# still under-projects the young and over-projects the old (measured out of sample:
+# <=25 beat proj ~15%, 30+ WR/TE ~0.87, 28-29 RB ~0.89). Correct it GENTLY -- full
+# strength over-adjusts and hurts MAE; 1/3 gets the full rank gain (+0.002) for ~0
+# MAE cost. Ratios learned leak-free from the training rows, per position group.
+_AGE_CAL_STRENGTH = 0.35
+
+
+def _age_bin(a) -> int:
+    if pd.isna(a):
+        return -1                        # unknown age -> neutral (factor 1.0)
+    return int(np.digitize(float(a), [24, 26, 28, 30]))   # <=23,24-25,26-27,28-29,30+
+
+
+def _age_posgrp(p: str) -> str:
+    return "RB" if p == "RB" else ("QB" if p == "QB" else "WRTE")
+
+
 _ROOKIE_FEATS = ["pick", "log_pick"]
 # Draft-pick tiers for the leak-free rookie calibration (see rookie_projection):
 # top picks are mean-accurate, the mid-rounds run hot, the late picks are noise.
