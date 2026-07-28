@@ -772,6 +772,17 @@ function renderBoard(){
       + `risk to weigh, not a mark-down.</div>`;
     return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">📉</span>`;
   };
+  // ⚠️ no known 2026 team: his projection is last year's production, but we can't
+  // see his current situation (free agent, or missing from our roster data). Verify
+  // his team/role before drafting -- it's a flag, not a mark-down.
+  const noTeamBadge = p => {
+    if(!p.no_team) return "";
+    const body = `<div class="t-hd">⚠️ No 2026 team in our data</div><div class="t-sub">`
+      + `His projection is built on last season's production, but we don't have a `
+      + `2026 team for him — he may be a free agent, or just missing from our roster `
+      + `snapshot. <b>Verify his team and role before you draft him.</b></div>`;
+    return `<span class="gem" data-tip="${body.replace(/"/g,'&quot;')}">⚠️</span>`;
+  };
   // Rookies get a second row: the situation the projection can't see. Draft
   // capital is all the model knows, so show who's ahead and whether the offense
   // throws -- a WR1-in-waiting on a pass-heavy team is not the same asset as a
@@ -848,7 +859,7 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${oppBadge(p)}${regBadge(p)}${schedBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${oppBadge(p)}${regBadge(p)}${schedBadge(p)}${noTeamBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td><button class="draftbtn" data-n="${p.player.replace(/"/g,'&quot;')}">Draft</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   document.querySelectorAll("#d-board .draftbtn").forEach(b=>b.onclick=()=>{ D.drafted.add(norm(b.dataset.n)); D._names=D._names||{}; D._names[norm(b.dataset.n)]=b.dataset.n; renderBoard(); renderDrafted(); });
 }
 function renderDrafted(){ const arr=[...D.drafted]; $("#d-count").textContent=arr.length?`(${arr.length})`:"";

@@ -422,10 +422,18 @@ def api_draft(req: DraftRequest):
         return err
     avail = best_available(board, req.drafted, req.position or None, req.n)
     rk, ctx = _rookie_ctx(req.season), _player_ctx(req.season, ranked=board)
+    rostered = _rostered_names(req.season)
+    from .optimize import _norm
     players = []
     for _, r in avail.iterrows():
         row = {"player": r["player"], "position": r["position"], "proj": round(float(r["proj"]), 1),
                "vor": round(float(r["vor"]), 1), "auction": int(r["auction"])}
+        # No known team for the draft year -- his projection rests on last year's
+        # production but we can't see his 2026 situation (FA, or missing from our
+        # roster snapshot). Flag it so a drafter verifies; not a penalty (the
+        # snapshot is incomplete, so it would wrongly tank players who DO have teams).
+        if rostered and r["player"] not in rk and _norm(r["player"]) not in rostered:
+            row["no_team"] = True
         # Upside, for the human: his boom ceiling, his floor, and whether his
         # ceiling outranks his projection (a buy-low sleeper).
         if "ceiling" in r and pd.notna(r["ceiling"]):
@@ -544,6 +552,25 @@ def _player_ctx(season: int, ranked=None) -> dict:
                 "who": (None if pd.isna(r["ol_names"]) else str(r["ol_names"])),
             }
     return _cache_put(_CTX, key, out)
+
+
+def _rostered_names(season: int) -> set:
+    """Normalised names of everyone on a `season` roster in our data. A veteran
+    with prior production but NOT in here has no known team for the draft year --
+    could be a genuine free agent OR just missing from our roster snapshot (it's
+    incomplete: Tyreek Hill/Deebo have teams but fall out), so we FLAG rather than
+    penalise. Empty set (flag nobody) if rosters aren't ingested."""
+    key = ("roster_names", season)
+    if key in _CTX:
+        return _CTX[key]
+    try:
+        from .db import connect
+        from .optimize import _norm
+        df = connect().sql(f"select distinct full_name from rosters where season = {int(season)}").df()
+        names = {_norm(n) for n in df["full_name"] if isinstance(n, str)}
+    except Exception:  # noqa: BLE001 - no rosters -> flag nobody
+        names = set()
+    return _cache_put(_CTX, key, names)
 
 
 def _rookie_ctx(season: int) -> dict:
