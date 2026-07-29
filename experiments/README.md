@@ -4,6 +4,7 @@ Generated from the JSON artifacts in `results/`. Regression holdouts may be reru
 
 | Date | Experiment | Variant | Holdout | Code | Result |
 |---|---|---|---|---|---|
+| 2026-07-29 | strategy-sweep | 2022–2025 · 0–100% sharp · paired | 2025 (regression) | `92cfa6c1` | 100% sharp adaptive: finish 5.4375 vs 4.375 (Δ +1.06); playoffs 66.7%; titles 16.7% |
 | 2026-07-29 | season-sweep | 2022–2025 · 0–100% sharp · baseline | 2025 (regression) | `dabbbf7c` | 0% sharp: finish 3.4167, playoffs 93.8%, titles 54.2%; 100%: finish 4.375, playoffs 81.2%, titles 20.8% |
 | 2026-07-28 | strategy-sweep | 2022–2025 · 0–100% sharp · paired | 2025 (regression) | `b4628248` | 100% sharp adaptive: finish 5.3958 vs 6.5208 (Δ -1.12); playoffs 58.3%; titles 8.3% |
 | 2026-07-28 | season-sweep | 2022–2025 · 0–100% sharp · baseline | 2025 (regression) | `4a34737f` | 0% sharp: finish 3.4167, playoffs 93.8%, titles 54.2%; 100%: finish 6.5208, playoffs 50.0%, titles 6.2% |
