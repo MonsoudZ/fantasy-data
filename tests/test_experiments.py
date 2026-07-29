@@ -116,6 +116,35 @@ def test_record_save_and_markdown_summary(tmp_path):
     assert summary_path.read_text() == text
 
 
+def test_summary_marks_superseded_results_and_links_replacement(tmp_path):
+    results = tmp_path / "results"
+    record = build_record(
+        "season", 2025, "regression", {"opponent": "sharp"},
+        {"mean_finish": 9.9}, duration_seconds=1,
+        git={"commit": "old", "dirty": False}, data={"available": True},
+    )
+    old_path = save_record(record, results)
+    (tmp_path / "superseded.json").write_text(json.dumps({
+        "version": 1,
+        "results": {
+            old_path.name: {
+                "replacement": "corrected.json",
+                "reason": "Selection model was flawed.",
+            }
+        },
+    }))
+
+    text = render_summary(results)
+    assert "**Superseded**" in text
+    assert "Selection model was flawed." in text
+    assert "[Corrected result](results/corrected.json)" in text
+
+
+def test_removed_strategy_sweep_is_not_a_cli_command():
+    with pytest.raises(SystemExit):
+        experiments.parser().parse_args(["strategy-sweep"])
+
+
 def test_weekly_cli_run_records_json_without_consuming_locked(tmp_path, monkeypatch):
     monkeypatch.setattr(experiments, "_ensure_played", lambda season: None)
     monkeypatch.setattr(
@@ -226,45 +255,3 @@ def test_season_sweep_parser_defaults_to_regression_window():
     args = experiments.parser().parse_args(["season-sweep"])
     assert args.seasons == "2022-2025"
     assert experiments._parse_fractions(args.sharp_fractions) == [0, 0.25, 0.5, 0.75, 1]
-
-
-def test_strategy_sweep_is_paired_and_reuses_each_season_context(monkeypatch):
-    import ffdata.season_sim as season_sim
-
-    prepared = []
-
-    def fake_prepare(season, **kwargs):
-        ctx = {"season": season}
-        prepared.append(ctx)
-        return ctx
-
-    def fake_run_all_slots(season, **kwargs):
-        adaptive = kwargs["draft_strategy"] == "adaptive"
-        place = 1 if adaptive else 2
-        return {
-            "runs": [
-                {"regular_season_place": place, "we_won": adaptive},
-                {"regular_season_place": place, "we_won": False},
-            ]
-        }
-
-    monkeypatch.setattr(season_sim, "prepare", fake_prepare)
-    monkeypatch.setattr(season_sim, "run_all_slots", fake_run_all_slots)
-    result = experiments.strategy_sweep_metrics(
-        [2024, 2025], [0.0, 1.0], teams=2, bootstrap_resamples=100,
-    )
-
-    assert len(prepared) == 2
-    assert result["n_slots_per_strategy_field"] == 4
-    assert len(result["paired_adaptive_vs_baseline"]) == 2
-    sharp = result["paired_adaptive_vs_baseline"][-1]
-    assert sharp["mean_finish_delta"]["estimate"] == -1.0
-    assert sharp["title_rate_delta"]["estimate"] == 0.5
-    titles = result["strategy_results"]["adaptive"]["field_strengths"][0]
-    assert titles["by_season"][0]["titles_by_slot"] == [True, False]
-
-
-def test_strategy_sweep_parser_defaults_to_paired_full_curve():
-    args = experiments.parser().parse_args(["strategy-sweep"])
-    assert args.seasons == "2022-2025"
-    assert args.scarcity_weight == 1.0

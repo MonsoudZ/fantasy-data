@@ -450,82 +450,22 @@ def _need_factor(position: str, counts: dict) -> float:
     return BENCH_DISCOUNT
 
 
-def _market_rank(boards, team: int) -> dict[str, float]:
-    """Consensus player rank across opponents' leak-free preseason boards."""
-    names = {_norm(p["player"]) for p in boards[team]}
-    opponents = [board for i, board in enumerate(boards) if i != team]
-    if not opponents:
-        return {name: float(i) for i, name in enumerate(sorted(names))}
-    totals = dict.fromkeys(names, 0.0)
-    for board in opponents:
-        ranks = {_norm(p["player"]): i for i, p in enumerate(board)}
-        missing = float(len(board) + 1)
-        for name in names:
-            totals[name] += ranks.get(name, missing)
-    return {name: total / len(opponents) for name, total in totals.items()}
-
-
-def _scarcity_urgency(board, taken: set[str], market_rank: dict[str, float],
-                      picks_until_next: int) -> dict[str, float]:
-    """Projected VOR loss by position before the adaptive team's next pick."""
-    if picks_until_next <= 0:
-        return {}
-    available = [p for p in board if _norm(p["player"]) not in taken]
-    likely_gone = {
-        _norm(p["player"])
-        for p in sorted(
-            available,
-            key=lambda p: (market_rank.get(_norm(p["player"]), float("inf")),
-                           _norm(p["player"])),
-        )[:picks_until_next]
-    }
-    now: dict[str, float] = {}
-    later: dict[str, float] = {}
-    for player in available:
-        pos = player["position"]
-        if pos in ("K", "DEF"):
-            continue
-        value = float(player.get("vor", 0.0))
-        now[pos] = max(now.get(pos, -1e18), value)
-        if _norm(player["player"]) not in likely_gone:
-            later[pos] = max(later.get(pos, -1e18), value)
-    return {
-        pos: max(0.0, value - later.get(pos, value))
-        for pos, value in now.items()
-    }
-
-
-def _roster_aware_draft(boards, need_aware, rounds, limits,
-                        adaptive: set[int] | None = None,
-                        scarcity_weight: float = 1.0):
+def _roster_aware_draft(boards, need_aware, rounds, limits):
     """Snake draft where `need_aware` teams weight VOR by open starting slots.
 
     Non-need-aware teams take the best available on their (pre-sorted) board, as
     before. A need-aware team re-ranks each pick by VOR x `_need_factor`, so a 4th
-    RB (bench) yields to an elite WR filling an empty WR slot. Adaptive teams also
-    add the VOR projected to disappear before their next pick, using the other
-    preseason boards as a leak-free market forecast.
+    RB (bench) yields to an elite WR filling an empty WR slot.
     """
     from .backtest_draft import snake_order
     n = len(boards)
-    adaptive = adaptive or set()
-    if not adaptive <= set(range(n)):
-        raise ValueError("adaptive team index is outside the league")
     order = snake_order(n, rounds)
-    market_ranks = {team: _market_rank(boards, team) for team in adaptive}
     taken: set[str] = set()
     counts = [{} for _ in range(n)]
     rosters: list[list[dict]] = [[] for _ in range(n)]
-    for pick_index, team in enumerate(order):
+    for team in order:
         pick = None
         if team in need_aware:
-            next_pick = next(
-                (i for i in range(pick_index + 1, len(order)) if order[i] == team),
-                None,
-            )
-            urgency = (_scarcity_urgency(
-                boards[team], taken, market_ranks[team], next_pick - pick_index - 1,
-            ) if team in adaptive and next_pick is not None else {})
             best_val = -1e18
             for p in boards[team]:
                 k = _norm(p["player"])
@@ -536,8 +476,7 @@ def _roster_aware_draft(boards, need_aware, rounds, limits,
                 # Sharp boards carry a manager-specific draft value. Falling back
                 # to VOR preserves the clean board used by us and all old callers.
                 base = (-1e6 if pos in ("K", "DEF") else
-                        p.get("draft_value", p.get("vor", 0.0))
-                        + scarcity_weight * urgency.get(pos, 0.0))
+                        p.get("draft_value", p.get("vor", 0.0)))
                 val = base * _need_factor(pos, counts[team])
                 if val > best_val:
                     best_val, pick = val, p
@@ -711,8 +650,7 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
                our_slot: int = 0, projector: str = "gbm", waivers: bool = True,
                con=None, log=print, ctx: dict | None = None, detail: bool = False,
                league_waivers: bool = True, opponent: str = "naive",
-               noise: float = 24.0, sharp_fraction: float = 0.5,
-               draft_strategy: str = "baseline", scarcity_weight: float = 1.0) -> dict:
+               noise: float = 24.0, sharp_fraction: float = 0.5) -> dict:
     """Draft blind, manage every week on projections only, report the whole league.
 
     EVERY team is managed the same way -- best lineup by projection each week, and
@@ -741,14 +679,7 @@ def run_season(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12,
     # drafts the same way (competent managers balance); the naive field keeps its
     # defining flaw -- raw-points greed that hoards QBs.
     need_aware = sharp | {our_slot}
-    if draft_strategy not in {"baseline", "adaptive"}:
-        raise ValueError("draft_strategy must be 'baseline' or 'adaptive'")
-    if scarcity_weight < 0:
-        raise ValueError("scarcity_weight must be non-negative")
-    adaptive = {our_slot} if draft_strategy == "adaptive" else set()
-    rosters = _roster_aware_draft(
-        boards, need_aware, ROSTER_SIZE, LIMITS, adaptive, scarcity_weight,
-    )
+    rosters = _roster_aware_draft(boards, need_aware, ROSTER_SIZE, LIMITS)
     drafted_rosters = [[dict(p) for p in r] for r in rosters]
 
     # Preseason per-week fallback, from the (leak-free) draft board. The weekly
@@ -909,9 +840,7 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
                   log=print, opponent: str = "naive", noise: float = 24.0,
                   career: bool = True, upside_weight: float = UPSIDE_WEIGHT,
                   competition: bool = True, reconcile: bool = True,
-                  sharp_fraction: float = 0.5, ctx: dict | None = None,
-                  draft_strategy: str = "baseline",
-                  scarcity_weight: float = 1.0) -> dict:
+                  sharp_fraction: float = 0.5, ctx: dict | None = None) -> dict:
     """Replay the season from EVERY draft slot and report the distribution.
 
     One season from one slot is a single sample: draft position and the
@@ -928,8 +857,7 @@ def run_all_slots(season: int, rules: ScoringRules = STANDARD, n_teams: int = 12
         r = run_season(season, rules, n_teams, slot, projector, waivers,
                        con, log=lambda *a: None, ctx=ctx,
                        opponent=opponent, noise=noise,
-                       sharp_fraction=sharp_fraction, draft_strategy=draft_strategy,
-                       scarcity_weight=scarcity_weight)
+                       sharp_fraction=sharp_fraction)
         runs.append(r)
         log(f"  slot {slot + 1:2d}: finished {r['regular_season_place']:2d} of {n_teams}"
             f"  ({'CHAMPION' if r['we_won'] else 'no title'})")

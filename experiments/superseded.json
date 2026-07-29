@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "results": {
+    "20260728T200254Z-season-2025-8548200a.json": {
+      "replacement": "20260729T171613Z-season-sweep-2025-a81fc4da.json",
+      "reason": "Sharp-manager noise reordered the board but did not affect actual roster-aware selections."
+    },
+    "20260728T205331Z-season-sweep-2025-ac5b61cd.json": {
+      "replacement": "20260729T171613Z-season-sweep-2025-a81fc4da.json",
+      "reason": "Sharp-manager noise reordered the board but did not affect actual roster-aware selections."
+    },
+    "20260728T221730Z-strategy-sweep-2025-18845957.json": {
+      "replacement": "20260729T172835Z-strategy-sweep-2025-94af2eb5.json",
+      "reason": "The strategy comparison used the flawed sharp-manager selection model."
+    }
+  }
+}

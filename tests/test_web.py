@@ -6,6 +6,8 @@ tests. They guard the hardening added after the audit: bounded request fields
 (no `range(2019, 2_000_000_000)` blowups) and a capped per-config cache.
 """
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -14,6 +16,13 @@ from conftest import requires_data_lake  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 from ffdata.ingest import current_nfl_season  # noqa: E402
+
+
+def test_retired_beat_the_field_control_is_absent():
+    html = (Path(__file__).parents[1] / "ffdata" / "static" / "index.html").read_text()
+    assert "Beat the field" not in html
+    assert 'id="d-target"' not in html
+    assert "function scarcity(" not in html
 
 # A season that has actually been PLAYED. These tests monkeypatch the projection
 # board, so the value only has to clear the "season hasn't kicked off" guard --

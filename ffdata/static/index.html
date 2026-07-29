@@ -170,7 +170,6 @@
   .gonebtn:hover { background:var(--bad,#c0392b); color:#fff; border-color:transparent; }
   .pos-row.fills { box-shadow:inset 3px 0 0 var(--good); }
   .need-dot { color:var(--good); font-size:9px; margin-right:5px; vertical-align:middle; }
-  .cliff { margin-right:4px; font-size:11px; vertical-align:middle; }
   .chip.mine { border-color:color-mix(in srgb, var(--good) 45%, var(--line)); }
   .filterbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
   .fchip { border:1px solid var(--line); background:#0e1530; color:var(--muted); font-size:12px; font-weight:700;
@@ -296,11 +295,6 @@
           </div>
           <div class="filterbar" id="d-filters"></div>
           <div class="search" style="margin-bottom:8px"><input type="text" id="d-search" placeholder="🔍 filter players…" autocomplete="off" /></div>
-          <div class="filterbar" style="margin-bottom:12px;font-size:12px;color:var(--muted)">
-            <button class="fchip" id="d-target" title="Rank by what runs dry before your next pick, not just raw value">🎯 Beat the field</button>
-            <span>My slot <input type="number" id="d-slot" min="1" max="32" placeholder="?" style="width:48px;background:var(--card2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:3px 6px;text-align:center"></span>
-          </div>
-          <div id="d-scarce" style="display:none;font-size:12px;margin-bottom:10px;padding:8px 10px;background:var(--card2);border:1px solid var(--line);border-radius:8px"></div>
           <div class="scroll" id="d-board"><div class="empty">Load the board to see VOR-ranked best-available.</div></div>
           <div id="kt" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
             <div class="filterbar">
@@ -697,7 +691,7 @@ function renderLineup(d){
 }
 
 /* ============ DRAFT ============ */
-const D = { board:[], drafted:new Set(), mine:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null, lineup:null, mode:"redraft", target:false, slot:null };
+const D = { board:[], drafted:new Set(), mine:new Set(), pos:"ALL", q:"", scoring:"ppr", rules:null, lineup:null, mode:"redraft" };
 // Roster-aware ranking: a player who fills one of YOUR open starting slots keeps
 // his full value; once those slots are full he's bench depth and gets halved, so
 // the board pivots to the position you still need. Mirrors the sim's _need_factor.
@@ -739,44 +733,13 @@ $("#d-go").onclick=loadDraft;
 function renderFilters(){ $("#d-filters").innerHTML=["ALL","QB","RB","WR","TE"].map(p=>`<button class="fchip ${p===D.pos?'on':''}" data-p="${p}">${p}</button>`).join("");
   document.querySelectorAll("#d-filters .fchip").forEach(b=>b.onclick=()=>{ D.pos=b.dataset.p; renderFilters(); renderBoard(); }); }
 $("#d-search").oninput=e=>{ D.q=e.target.value.trim(); renderBoard(); };
-$("#d-target").onclick=()=>{ D.target=!D.target; $("#d-target").classList.toggle("on",D.target); renderBoard(); };
-$("#d-slot").oninput=e=>{ const v=parseInt(e.target.value); D.slot=(v>=1?v:null); if(D.target) renderBoard(); };
-// Beat-the-field scarcity: from your draft slot + who's gone, how much VOR each
-// position LOSES before your next pick. In a snake, the picks between your turns
-// alternate 2*(T-slot)+1 / 2*slot-1; the players likely gone in that window are
-// the top-`gap` available by ADP (the market drafts ~by ADP). The drop-off from
-// the best available NOW to the best that SURVIVES = the urgency to draft it now.
-function scarcity(avail){
-  const T=(+$("#d-teams").value)||12, S=D.slot;
-  const pick=D.drafted.size+1, round=Math.floor((pick-1)/T);
-  const myPick=r=> r%2===0 ? r*T+S : r*T+(T-S+1);
-  let myNext=null; if(S){ for(let r=round;r<round+4;r++){ const mp=myPick(r); if(mp>pick){ myNext=mp; break; } } }
-  const gap=myNext? myNext-pick : T;                                   // no slot -> assume ~1 round
-  const gone=new Set(avail.filter(p=>p.adp!=null).sort((a,b)=>a.adp-b.adp).slice(0,gap).map(p=>norm(p.player)));
-  const now={}, next={};
-  avail.forEach(p=>{ now[p.position]=Math.max(now[p.position]??-9e9,p.vor);
-    if(!gone.has(norm(p.player))) next[p.position]=Math.max(next[p.position]??-9e9,p.vor); });
-  const urg={}; ["QB","RB","WR","TE"].forEach(pos=>{ urg[pos]=Math.max(0,(now[pos]??0)-(next[pos]??now[pos]??0)); });
-  return { urg, gap, myNext };
-}
 function renderBoard(){
   const dyn=D.mode==="dynasty";
   const {starters, flex} = starterNeeds(), counts = myCounts(), haveTeam = D.mine.size>0;
   const availAll = D.board.filter(p=>!D.drafted.has(norm(p.player)));
-  const sc = (D.target && !dyn) ? scarcity(availAll) : {urg:{}, gap:0, myNext:null};
-  const scBar=$("#d-scarce");
-  if(D.target && !dyn){
-    scBar.style.display="block";
-    const line=["RB","WR","TE","QB"].map(pos=>{ const u=sc.urg[pos]||0, need=(counts[pos]||0)<(starters[pos]||0);
-      const cls=u>=25?"rk-bad":(u>=10?"":"rk-good");
-      return `<span class="${cls}" style="margin-right:12px">${need?'<b>':''}${pos} −${u.toFixed(0)}${need?'</b>':''}</span>`; }).join("");
-    scBar.innerHTML=`<b>🎯 By your ${sc.myNext?`pick #${sc.myNext}`:'next pick'}</b> each position loses (bold = you still need it): ${line}<div class="hint" style="margin-top:4px">Board is boosted toward what runs dry first. Red = a cliff — draft it now.</div>`;
-  } else scBar.style.display="none";
   const rows=availAll.filter(p=>(D.pos==="ALL"||p.position===D.pos) && (!D.q||norm(p.player).includes(norm(D.q))))
-    .map(p=>{ const nf=needFactor(p.position,counts,starters,flex), u=sc.urg[p.position]||0;
-      // urgency is need-weighted: a position running dry only matters if you still
-      // need it (a filled WR slot shouldn't chase the WR cliff, except via the flex).
-      return {...p, _fills:nf>=1.0, _needvor:p.vor*nf, _urg:u, _score:(p.vor + (D.target?u:0))*nf}; })
+    .map(p=>{ const nf=needFactor(p.position,counts,starters,flex);
+      return {...p, _fills:nf>=1.0, _score:p.vor*nf}; })
     .sort((a,b)=>b._score-a._score).slice(0,120);
   const head=dyn
     ? `<th>#</th><th>Player</th><th></th><th class="num">Age</th><th class="num">Proj</th><th class="num">VOR</th><th class="num">Dyn</th><th></th>`
@@ -935,7 +898,7 @@ function renderBoard(){
     return `<tr class="rk-row"><td></td><td colspan="${ncols-1}"><div class="rk-ctx">${bits.join("")}</div></td></tr>`;
   };
   $("#d-board").innerHTML=`<table><thead><tr>${head}</tr></thead><tbody>${
-    rows.map((p,i)=>`<tr class="pos-row${haveTeam&&p._fills?' fills':''}"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${haveTeam&&p._fills?'<span class="need-dot" title="Fills one of your open starting slots">●</span>':''}${D.target&&p._urg>=25&&p._fills?`<span class="cliff" title="This position falls off a cliff before your next pick — draft it now">🎯</span>`:''}${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${oppBadge(p)}${regBadge(p)}${schedBadge(p)}${noTeamBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td class="draftcell"><button class="minebtn" data-n="${p.player.replace(/"/g,'&quot;')}" title="Draft to MY team">＋ Mine</button><button class="gonebtn" data-n="${p.player.replace(/"/g,'&quot;')}" title="Taken by another team">Gone</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
+    rows.map((p,i)=>`<tr class="pos-row${haveTeam&&p._fills?' fills':''}"><td class="num" style="text-align:left;color:var(--muted)">${i+1}</td><td class="pname">${haveTeam&&p._fills?'<span class="need-dot" title="Fills one of your open starting slots">●</span>':''}${p.player}${p.rookie?'<span class="rk-badge">R</span>':''}${anchorBadge(p)}${gemBadge(p)}${oppBadge(p)}${regBadge(p)}${schedBadge(p)}${noTeamBadge(p)}${injBadge(p)}</td><td><span class="pos ${p.position}">${p.position}</span></td>${cells(p)}<td class="draftcell"><button class="minebtn" data-n="${p.player.replace(/"/g,'&quot;')}" title="Draft to MY team">＋ Mine</button><button class="gonebtn" data-n="${p.player.replace(/"/g,'&quot;')}" title="Taken by another team">Gone</button></td></tr>`+ctxRow(p)).join("")}</tbody></table>`;
   const take=(n,mine)=>{ const k=norm(n); D.drafted.add(k); if(mine) D.mine.add(k); D._names=D._names||{}; D._names[k]=n; renderBoard(); renderDrafted(); renderMyTeam(); };
   document.querySelectorAll("#d-board .minebtn").forEach(b=>b.onclick=()=>take(b.dataset.n,true));
   document.querySelectorAll("#d-board .gonebtn").forEach(b=>b.onclick=()=>take(b.dataset.n,false));

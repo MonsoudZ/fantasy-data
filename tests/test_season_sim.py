@@ -382,40 +382,6 @@ def test_run_all_slots_accepts_a_reusable_context(monkeypatch):
     assert result["places"] == [1, 2, 3]
 
 
-def test_scarcity_urgency_measures_value_lost_before_next_pick():
-    from ffdata.season_sim import _scarcity_urgency
-
-    board = [
-        {"player": "RB Alpha", "position": "RB", "vor": 80},
-        {"player": "WR Alpha", "position": "WR", "vor": 100},
-        {"player": "WR Beta", "position": "WR", "vor": 95},
-        {"player": "RB Beta", "position": "RB", "vor": 10},
-    ]
-    market = {"rb alpha": 0, "wr alpha": 1, "wr beta": 2, "rb beta": 3}
-    urgency = _scarcity_urgency(board, set(), market, picks_until_next=2)
-    assert urgency == {"RB": 70.0, "WR": 5.0}
-
-
-def test_adaptive_draft_takes_a_cliff_before_higher_standalone_vor():
-    from ffdata.season_sim import _roster_aware_draft
-
-    ours = [
-        {"player": "WR Alpha", "position": "WR", "vor": 100},
-        {"player": "WR Beta", "position": "WR", "vor": 95},
-        {"player": "RB Alpha", "position": "RB", "vor": 80},
-        {"player": "RB Beta", "position": "RB", "vor": 10},
-    ]
-    market = [ours[2], ours[0], ours[1], ours[3]]
-    baseline = _roster_aware_draft(
-        [ours, market], {0}, 2, {"RB": 4, "WR": 4},
-    )
-    adaptive = _roster_aware_draft(
-        [ours, market], {0}, 2, {"RB": 4, "WR": 4}, adaptive={0},
-    )
-    assert baseline[0][0]["player"] == "WR Alpha"
-    assert adaptive[0][0]["player"] == "RB Alpha"
-
-
 def test_jitter_is_deterministic_and_bounded():
     """No RNG (the sandbox forbids it) -- a hash, so the whole sim reproduces."""
     from ffdata.season_sim import _jitter

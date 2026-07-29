@@ -27,7 +27,6 @@ DEFAULT_POLICY = {
         "draft": {"regression": 2025, "locked": 2026},
         "season": {"regression": 2025, "locked": 2026},
         "season-sweep": {"regression": 2025, "locked": 2026},
-        "strategy-sweep": {"regression": 2025, "locked": 2026},
     },
 }
 
@@ -74,6 +73,18 @@ def load_results(results_dir: Path) -> list[dict]:
         row["_path"] = path
         rows.append(row)
     return rows
+
+
+def load_supersessions(path: Path) -> dict[str, dict]:
+    """Load external annotations without mutating immutable result artifacts."""
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    results = payload.get("results", {})
+    return results if isinstance(results, dict) else {}
 
 
 def resolve_holdout(
@@ -353,29 +364,41 @@ def variant_summary(record: dict) -> str:
 def render_summary(results_dir: Path, output: Path | None = None) -> str:
     results_dir = Path(results_dir)
     records = sorted(load_results(results_dir), key=lambda r: r.get("created_at", ""), reverse=True)
+    superseded = load_supersessions(results_dir.parent / "superseded.json")
     lines = [
         "# Experiment results",
         "",
         "Generated from the JSON artifacts in `results/`. Regression holdouts may be rerun; "
         "locked holdouts are reserved for one final evaluation.",
+        "Superseded results are retained for auditability but must not be used for conclusions.",
         "",
     ]
     if not records:
         lines.append("No experiment results recorded yet.")
     else:
         lines.extend([
-            "| Date | Experiment | Variant | Holdout | Code | Result |",
-            "|---|---|---|---|---|---|",
+            "| Date | Experiment | Variant | Status | Holdout | Code | Result |",
+            "|---|---|---|---|---|---|---|",
         ])
         for row in records:
             git = row.get("git", {})
             commit = (git.get("commit") or "unknown")[:8] + (" dirty" if git.get("dirty") else "")
             holdout = row.get("holdout", {})
             date = row.get("created_at", "")[:10]
+            annotation = superseded.get(row["_path"].name)
+            if annotation:
+                replacement = annotation.get("replacement")
+                replacement_link = (f" [Corrected result](results/{replacement})."
+                                    if replacement else "")
+                status = "**Superseded**"
+                result = f"{annotation.get('reason', 'Invalidated by a later correction.')}{replacement_link}"
+            else:
+                status = "Recorded"
+                result = metric_summary(row)
             lines.append(
                 f"| {date} | {row.get('kind')} | {variant_summary(row)} | "
-                f"{holdout.get('season')} "
-                f"({holdout.get('tier')}) | `{commit}` | {metric_summary(row)} |"
+                f"{status} | {holdout.get('season')} "
+                f"({holdout.get('tier')}) | `{commit}` | {result} |"
             )
     text = "\n".join(lines) + "\n"
     if output is not None:
