@@ -533,8 +533,11 @@ def _roster_aware_draft(boards, need_aware, rounds, limits,
                 if k in taken or counts[team].get(pos, 0) >= limits.get(pos, 99):
                     continue
                 # K/DEF have no VOR and belong last; force them behind skill depth.
+                # Sharp boards carry a manager-specific draft value. Falling back
+                # to VOR preserves the clean board used by us and all old callers.
                 base = (-1e6 if pos in ("K", "DEF") else
-                        p.get("vor", 0.0) + scarcity_weight * urgency.get(pos, 0.0))
+                        p.get("draft_value", p.get("vor", 0.0))
+                        + scarcity_weight * urgency.get(pos, 0.0))
                 val = base * _need_factor(pos, counts[team])
                 if val > best_val:
                     best_val, pick = val, p
@@ -604,9 +607,17 @@ def _draft_boards_for(ours, naive, n_teams, our_slot, opponent, noise,
         if t == our_slot:
             boards.append(ours)
         elif t in sharp:
-            boards.append(ours if noise <= 0 else sorted(
-                ours, key=lambda p: -(p["proj"] + _jitter(p["player"], t, noise)),
-            ))
+            if noise <= 0:
+                boards.append(ours)
+            else:
+                board = []
+                for player in ours:
+                    rated = dict(player)
+                    rated["draft_value"] = (-1e6 if player["position"] in ("K", "DEF")
+                                             else float(player.get("vor", 0.0))
+                                             + _jitter(player["player"], t, noise))
+                    board.append(rated)
+                boards.append(sorted(board, key=lambda p: -p["draft_value"]))
         else:
             boards.append(naive)
     return boards

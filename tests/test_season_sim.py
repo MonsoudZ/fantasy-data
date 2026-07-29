@@ -274,7 +274,10 @@ def test_sharp_opponents_draft_by_value_naive_opponents_hoard_qbs():
     to actually change who the opponents draft."""
     from ffdata.season_sim import _draft_boards_for
 
-    ours = [{"player": f"P{i}", "position": "RB", "proj": 200 - i} for i in range(50)]
+    ours = [
+        {"player": f"P{i}", "position": "RB", "proj": 200 - i, "vor": 100 - i}
+        for i in range(50)
+    ]
     naive = [{"player": f"Q{i}", "position": "QB", "proj": 300 - i} for i in range(50)]
 
     nb = _draft_boards_for(ours, naive, 12, our_slot=0, opponent="naive", noise=24)
@@ -285,6 +288,51 @@ def test_sharp_opponents_draft_by_value_naive_opponents_hoard_qbs():
     # Opponents draft OUR board, just reordered by their own noise -- same players.
     assert {p["player"] for p in sb[1]} == {p["player"] for p in ours}
     assert [p["player"] for p in sb[1]] != [p["player"] for p in ours]  # but reranked
+    assert all("draft_value" in p for p in sb[1])
+
+
+def test_sharp_manager_values_change_actual_pick_from_identical_state(monkeypatch):
+    import ffdata.season_sim as season_sim
+
+    ours = [
+        {"player": "Alpha", "position": "RB", "proj": 200, "vor": 100},
+        {"player": "Bravo", "position": "RB", "proj": 199, "vor": 100},
+        {"player": "Charlie", "position": "RB", "proj": 198, "vor": 100},
+    ]
+    values = {
+        1: {"Alpha": 20, "Bravo": 0, "Charlie": -20},
+        2: {"Alpha": -20, "Bravo": 20, "Charlie": 0},
+    }
+    monkeypatch.setattr(
+        season_sim, "_jitter", lambda name, team, scale: values[team][name],
+    )
+    boards = season_sim._draft_boards_for(
+        ours, [], 3, our_slot=0, opponent="sharp", noise=24,
+    )
+
+    # Replay each manager from the same empty draft state. The selection engine,
+    # not merely the displayed board order, must consume the individualized value.
+    pick_one = season_sim._roster_aware_draft(
+        [boards[1]], {0}, 1, {"RB": 3},
+    )[0][0]["player"]
+    pick_two = season_sim._roster_aware_draft(
+        [boards[2]], {0}, 1, {"RB": 3},
+    )[0][0]["player"]
+    assert pick_one == "Alpha"
+    assert pick_two == "Bravo"
+
+
+def test_zero_noise_sharp_manager_uses_clean_vor_value():
+    from ffdata.season_sim import _draft_boards_for, _roster_aware_draft
+
+    ours = [
+        {"player": "Alpha", "position": "WR", "proj": 90, "vor": 40},
+        {"player": "Bravo", "position": "WR", "proj": 100, "vor": 30},
+    ]
+    boards = _draft_boards_for(ours, [], 2, our_slot=0, opponent="sharp", noise=0)
+    picked = _roster_aware_draft([boards[1]], {0}, 1, {"WR": 2})[0][0]
+    assert picked["player"] == "Alpha"
+    assert "draft_value" not in picked
 
 
 def test_mixed_field_has_deterministic_composition_and_exact_endpoints():
